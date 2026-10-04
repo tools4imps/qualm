@@ -175,7 +175,7 @@ Each settled answer set is stored as `<key>.json` in the user cache directory un
 
 ## Money
 
-`--budget DOLLARS`, default 1.00. qualm adds up `usage.cost` from each reply, falling back to input tokens at $0.042 per million when the reply carries no cost. When the next request could exceed the budget it stops and exits 2, naming what was spent. Replayed answers cost nothing.
+`--budget DOLLARS`, default 1.00. qualm adds up `usage.cost` from each reply, falling back to input tokens at $0.042 per million when the reply carries no cost. Once the spend reaches the budget it makes no further request and exits 2, naming what was spent. Replayed answers cost nothing.
 
 ## Failure
 
