@@ -12,8 +12,8 @@ import (
 
 // Options is everything a run needs from the command line and its surroundings.
 type Options struct {
-	Dir          string  // the repository
-	Base         string  // --base, empty for the default branch
+	Dir          string // the repository
+	Base         string // --base, empty for the default branch
 	Paths        []string
 	IncludeTests bool
 	Threshold    float64 // --threshold, 0 when not given
