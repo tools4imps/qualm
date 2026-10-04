@@ -1,0 +1,13 @@
+# The built binary and release artefacts
+/qualm
+/dist/
+
+# Session notes
+/docs/handoffs/
+
+# The spike's cache and raw results. The scripts and question sets are kept.
+/spike/cache/
+/spike/checks/
+/spike/results.json
+/spike/history*.json
+/spike/compare*.json

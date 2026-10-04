@@ -1,0 +1,62 @@
+[
+  {
+    "id": "direction",
+    "type": "choice",
+    "instructions": "Compared with the earlier version, how hard is the later version to understand and change? Judge the code itself and set comments and documentation aside, so a version that differs only in its comments counts as the same.",
+    "criteria": {
+      "harder": "The later version is harder to understand or riskier to change.",
+      "same": "There is no real difference in how hard the code is to understand and change.",
+      "easier": "The later version is easier to understand or safer to change."
+    }
+  },
+  {
+    "id": "push_back",
+    "type": "noul",
+    "instructions": "Would an experienced reviewer ask for this change to be simplified before it merges? Judge the code itself and set comments and documentation aside."
+  },
+  {
+    "id": "simplified",
+    "type": "noul",
+    "instructions": "Did the change remove complexity from this file: fewer branches, less state to track, or logic moved out to a clearer place?"
+  },
+  {
+    "id": "comments_only",
+    "type": "noul",
+    "instructions": "Does the later version differ from the earlier one only in comments, documentation or whitespace?"
+  },
+  {
+    "id": "new_behaviour",
+    "type": "noul",
+    "instructions": "Is this change mostly new behaviour being added, with little of the existing behaviour reshaped?"
+  },
+  {
+    "id": "added_tangle",
+    "type": "noul",
+    "instructions": "Did the change add conditions or changing values that a reader must now hold in mind together with the ones already there?"
+  },
+  {
+    "id": "grew_a_big_unit",
+    "type": "noul",
+    "instructions": "Did the change make an already long function or class longer, where the new work could have gone in a unit of its own?"
+  },
+  {
+    "id": "added_copies",
+    "type": "noul",
+    "instructions": "Did the change add logic that is a near-copy of logic already in the file?"
+  },
+  {
+    "id": "added_impossible_guards",
+    "type": "noul",
+    "instructions": "Did the change add checks or fallbacks for states the surrounding code shows can't happen?"
+  },
+  {
+    "id": "added_placeholders",
+    "type": "noul",
+    "instructions": "Did the change add placeholder implementations, debug output or unfinished scaffolding?"
+  },
+  {
+    "id": "added_unused_flexibility",
+    "type": "noul",
+    "instructions": "Did the change add options, hooks or indirection that the file uses in only one place?"
+  }
+]

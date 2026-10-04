@@ -1,0 +1,145 @@
+[
+  {
+    "id": "hard_to_maintain",
+    "group": "verdict",
+    "type": "noul",
+    "instructions": "Would an experienced developer, new to this code, expect changing it to be slow or risky? Judge how hard it is to understand and change, and ignore formatting."
+  },
+  {
+    "id": "tangled_conditions",
+    "group": "load",
+    "type": "noul",
+    "instructions": "To understand this code, must a reader hold several conditions or changing values in mind at once, each affecting the others?"
+  },
+  {
+    "id": "hard_to_trace",
+    "group": "load",
+    "type": "score",
+    "instructions": "How hard is it to follow one path through this code from start to finish?",
+    "criteria": [
+      "The path stays in one place and reads top to bottom.",
+      "Following it means tracking several branches or state changes.",
+      "Following it means jumping between distant parts while state keeps changing."
+    ]
+  },
+  {
+    "id": "does_too_much",
+    "group": "load",
+    "type": "noul",
+    "instructions": "Does a single function or class here do several unrelated jobs that would be easier to follow apart?"
+  },
+  {
+    "id": "hidden_effects",
+    "group": "load",
+    "type": "noul",
+    "instructions": "Do functions here change state, or have other effects, that their names and arguments give no hint of?"
+  },
+  {
+    "id": "order_dependent",
+    "group": "load",
+    "type": "noul",
+    "instructions": "Does this code work only if its functions are called in a particular order that nothing in the code enforces?"
+  },
+  {
+    "id": "copied_logic",
+    "group": "one fact, many places",
+    "type": "score",
+    "instructions": "How much of this code is near-copies that would all need the same edit when behaviour changes?",
+    "criteria": [
+      "Nothing of substance is repeated.",
+      "A few small blocks repeat with slight differences.",
+      "Several sizeable blocks repeat, so one change in behaviour means editing each copy.",
+      "Most of the logic is copies with variations, and some copies have already drifted apart."
+    ]
+  },
+  {
+    "id": "mirrored_state",
+    "group": "one fact, many places",
+    "type": "score",
+    "instructions": "How much information is stored in more than one place and kept in step by hand?",
+    "criteria": [
+      "Each piece of information lives in one place, or the code holds no state.",
+      "One value is cached or copied, and it is refreshed in a single obvious place.",
+      "Several values are copied or cached, and every writer has to remember to update each copy.",
+      "Copies are updated unevenly in the code shown, so some paths can leave them disagreeing."
+    ]
+  },
+  {
+    "id": "spelled_out_by_hand",
+    "group": "one fact, many places",
+    "type": "score",
+    "instructions": "How often are related items listed one by one, in several places, where a collection and a loop would do?",
+    "criteria": [
+      "Related items are held in a collection and handled by a loop.",
+      "A small set is listed by hand in one or two places.",
+      "A larger set is listed by hand in several functions, so adding an item means editing each of them.",
+      "Nearly every function lists the same large set by hand, where a missing or misplaced item would be easy to overlook."
+    ]
+  },
+  {
+    "id": "magic_values",
+    "group": "one fact, many places",
+    "type": "noul",
+    "instructions": "Do the same special numbers or strings appear in several places without a name?"
+  },
+  {
+    "id": "impossible_guards",
+    "group": "agent leftovers",
+    "type": "noul",
+    "instructions": "Does this code defend against states the code around it shows can't happen, such as a nil check on a value that is always set, or a fallback for a case that never occurs?"
+  },
+  {
+    "id": "dead_code",
+    "group": "agent leftovers",
+    "type": "noul",
+    "instructions": "Does this file hold code that nothing visible uses: unused functions, parameters or variables, branches that can't be reached, or code left in comments?"
+  },
+  {
+    "id": "unused_flexibility",
+    "group": "agent leftovers",
+    "type": "noul",
+    "instructions": "Does this code carry options, hooks or layers of indirection that have a single caller or a single implementation?"
+  },
+  {
+    "id": "pass_through_layers",
+    "group": "agent leftovers",
+    "type": "noul",
+    "instructions": "Is much of this code wrappers that hand their arguments on to something else and add nothing?"
+  },
+  {
+    "id": "noise_comments",
+    "group": "agent leftovers",
+    "type": "noul",
+    "instructions": "Are many of the comments noise: restating what the next line plainly does, narrating the history of a change, or addressed to whoever asked for the code?"
+  },
+  {
+    "id": "swallowed_errors",
+    "group": "agent leftovers",
+    "type": "noul",
+    "instructions": "Does this code catch errors and carry on without handling or reporting them?"
+  },
+  {
+    "id": "leftovers",
+    "group": "agent leftovers",
+    "type": "noul",
+    "instructions": "Does this code contain debug output, placeholder implementations or unfinished scaffolding?"
+  },
+  {
+    "id": "misleading_names",
+    "group": "names and intent",
+    "type": "noul",
+    "instructions": "Would the names here leave a reader guessing, because they are vague, inconsistent for the same thing, or say something the code doesn't do?"
+  },
+  {
+    "id": "unclear_purpose",
+    "group": "names and intent",
+    "type": "noul",
+    "instructions": "After reading this file, would a developer still be unsure what it is for?"
+  },
+  {
+    "id": "mostly_boilerplate",
+    "group": "in the file's favour",
+    "type": "noul",
+    "instructions": "Is most of this plain declarations, simple accessors, configuration or data whose behaviour is obvious at a glance? Size alone doesn't make code complicated."
+  }
+]
