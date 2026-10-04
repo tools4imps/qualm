@@ -4,6 +4,7 @@ package skip
 
 import (
 	"path"
+	"slices"
 	"strings"
 )
 
@@ -37,7 +38,7 @@ func (r Rules) Reason(path string) string {
 		return ""
 	}
 	for _, dir := range segments[:len(segments)-1] {
-		if contains(builtDirs, dir) {
+		if slices.Contains(builtDirs, dir) {
 			return "vendored or built"
 		}
 	}
@@ -68,6 +69,11 @@ func Match(pattern, path string) bool {
 	}
 	if !strings.Contains(pattern, "/") {
 		return matchSegment(pattern, segments[len(segments)-1])
+	}
+	// "docs/" is how people write a directory, and they mean everything under it. The "*" asks
+	// for at least one segment below, so a file that happens to be named "docs" isn't caught.
+	if strings.HasSuffix(pattern, "/") {
+		pattern += "**/*"
 	}
 	return matchSegments(split(pattern), segments)
 }
@@ -100,7 +106,7 @@ func matchSegment(pattern, name string) bool {
 func isTest(segments []string) bool {
 	last := len(segments) - 1
 	for _, dir := range segments[:last] {
-		if contains(testDirs, dir) {
+		if slices.Contains(testDirs, dir) {
 			return true
 		}
 	}
@@ -126,13 +132,4 @@ func split(path string) []string {
 		}
 	}
 	return out
-}
-
-func contains(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
 }

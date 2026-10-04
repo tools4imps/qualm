@@ -155,6 +155,12 @@ func TestMatch(t *testing.T) {
 		{"src/*/main.go", "src/a/main.go", true},
 		{"src/*/main.go", "src/a/b/main.go", false},
 		{"s?c/main.go", "src/main.go", true},
+		// A trailing slash names a directory and everything under it.
+		{"docs/", "docs/guide/intro.go", true},
+		{"docs/", "docs/a.go", true},
+		{"docs/", "lib/docs/a.go", false},
+		{"docs/", "docs", false},
+		{"**/fixtures/", "a/b/fixtures/x/y.go", true},
 		// "*" and "?" stay inside one segment.
 		{"a*c/x.go", "a/b/c/x.go", false},
 		{"a?c/x.go", "a/c/x.go", false},

@@ -483,3 +483,37 @@ func TestAttributesMarkGeneratedAndVendoredFiles(t *testing.T) {
 		}
 	}
 }
+
+// Contract: diff/D12
+func TestRootIsFoundFromAnyDirectoryInside(t *testing.T) {
+	dir := newRepo(t)
+	write(t, dir, "lib/deep/a.go", "package a\n")
+	commit(t, dir, "first")
+	// macOS hands out temp directories through a symlink, and git reports the real path.
+	want, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, from := range []string{dir, filepath.Join(dir, "lib"), filepath.Join(dir, "lib", "deep")} {
+		got, err := Root(from)
+		if err != nil {
+			t.Fatalf("Root(%q): %v", from, err)
+		}
+		if got != want {
+			t.Errorf("Root(%q) = %q, want %q", from, got, want)
+		}
+	}
+}
+
+// Contract: diff/D12
+func TestRootOutsideARepositoryIsAnError(t *testing.T) {
+	// GIT_CEILING_DIRECTORIES stops git from walking up into a repository that happens to hold
+	// the temp directory.
+	dir := t.TempDir()
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(dir))
+	if got, err := Root(dir); err == nil {
+		t.Errorf("Root outside a repository = %q, want an error", got)
+	} else if !strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("error %q should say it is not a git repository", err)
+	}
+}

@@ -62,6 +62,16 @@ func resolve(dir, ref string) string {
 	return strings.TrimSpace(out)
 }
 
+// Root returns the top of the repository that holds dir. qualm.json lives there, and every path
+// qualm reports is relative to it.
+func Root(dir string) (string, error) {
+	out, err := run(dir, "", nil, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", fmt.Errorf("%s is not a git repository", dir)
+	}
+	return strings.TrimSpace(out), nil
+}
+
 // Base returns the commit to compare the working tree with: the merge base of ref and HEAD.
 // An empty ref means the default branch.
 func Base(dir, ref string) (string, error) {

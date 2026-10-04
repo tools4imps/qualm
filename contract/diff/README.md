@@ -15,6 +15,7 @@ The diff is what Jev sees, what the cache is keyed by and what a keep binds to. 
 - **D9** A file that git attributes mark `linguist-generated` or `linguist-vendored` is marked.
 - **D10** Each hunk carries the line range it covers in the new file.
 - **D11** Splitting keeps hunks whole and repeats the `---` and `+++` lines on every piece. A hunk larger than the limit is split between lines. Read in order, the pieces hold every line of the original hunks.
+- **D12** The repository's root is found from any directory inside it. Outside a repository it is an error that says so.
 
 ```covers
 internal/gitdiff
