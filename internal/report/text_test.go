@@ -352,6 +352,8 @@ What to do
 func TestTheKeepCommandQuotesEveryCharacterAShellWouldRead(t *testing.T) {
 	cases := map[string]string{
 		"a/b-c_d.E9":       "a/b-c_d.E9",
+		"azAZ09":           "azAZ09",
+		"`{@[:":            "'`{@[:'",
 		"a b":              "'a b'",
 		"$(reboot).rb":     "'$(reboot).rb'",
 		"`reboot`.rb":      "'`reboot`.rb'",

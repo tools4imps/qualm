@@ -308,10 +308,11 @@ func TestBadFlagsExitTwoWithUsage(t *testing.T) {
 // Contract: cli/L3
 func TestFlagsAtTheirLimitsAreAccepted(t *testing.T) {
 	cases := map[string][]string{
-		"threshold one": {"--threshold", "1"},
-		"jobs one":      {"--jobs", "1"},
-		"tiny budget":   {"--budget", "0.000001"},
-		"format json":   {"--format", "json"},
+		"threshold one":  {"--threshold", "1"},
+		"jobs one":       {"--jobs", "1"},
+		"largest budget": {"--budget", "1.7976931348623157e308"},
+		"tiny budget":    {"--budget", "0.000001"},
+		"format json":    {"--format", "json"},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {

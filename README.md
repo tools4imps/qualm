@@ -179,7 +179,7 @@ That is the whole of the evidence. It is one codebase in one language, and nobod
 
 qualm has its own Contract in `contract/`: 89 numbered obligations across nine primitives (skip, diff, questions, config, jev, judge, gate, report and cli). Every obligation has at least one test that names it with a `// Contract: <primitive>/<id>` comment. A test in `internal/contractcheck` publishes contract coverage and fails while any obligation lacks a test.
 
-The tests are held to account too. [Gremlins](https://github.com/go-gremlins/gremlins) mutates every package and reruns the suite. The tests kill 314 mutants, and the 7 that survive are each explained in [`docs/mutation.md`](docs/mutation.md).
+The tests are held to account too. [Gremlins](https://github.com/go-gremlins/gremlins) mutates every package and reruns the suite. The tests kill 381 mutants, and the 7 that survive are each explained in [`docs/mutation.md`](docs/mutation.md).
 
 Before a release, qualm runs on its own change.
 

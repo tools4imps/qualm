@@ -409,6 +409,40 @@ func TestRunAsksAgainWhenACachedEntryDoesNotAnswerEveryQuestion(t *testing.T) {
 }
 
 // Contract: judge/U3
+func TestRunReplaysACachedEntryWhoseValuesAreZeroAndOne(t *testing.T) {
+	t.Parallel()
+	r := oneChange(t)
+	f := newFake(t, says(map[string]float64{"push_back": 0.9}))
+	o := r.options(f)
+	mustRun(t, o)
+	for name, data := range entries(t, o.CacheDir) {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(data), &entry); err != nil {
+			t.Fatal(err)
+		}
+		answers := entry["answers"].(map[string]any)
+		answers["push_back"] = map[string]any{"value": 1}
+		answers["simplified"] = map[string]any{"value": 0}
+		edited, err := json.Marshal(entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(o.CacheDir, name), edited, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	second := mustRun(t, o)
+
+	if f.count() != 1 {
+		t.Errorf("made %d requests, want the entry with 0 and 1 replayed", f.count())
+	}
+	if got := file(t, second, "a.go").Answers["push_back"].Value; got != 1 {
+		t.Errorf("push_back = %v, want the cached 1", got)
+	}
+}
+
+// Contract: judge/U3
 func TestRunWithTheCacheOffReadsNothingAndWritesNothing(t *testing.T) {
 	t.Parallel()
 	r := oneChange(t)

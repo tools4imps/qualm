@@ -1024,3 +1024,12 @@ func TestAnUntrackedDirectoryThatGitListsByNameIsNoChange(t *testing.T) {
 		t.Errorf("read %+v, want pkg/x.go and the link to a file, which reads as the name it points at", got)
 	}
 }
+
+// Contract: diff/D15
+func TestReadRecognisesAReasonThatStartsTheOutput(t *testing.T) {
+	fakeGit(t, ``, ``, `Binary files a/x and b/x differ\n`)
+	d, err := Read(t.TempDir(), "base", Change{Path: "x"})
+	if err != nil || !d.Binary || d.Text != "" {
+		t.Errorf("Read = %+v, %v", d, err)
+	}
+}
