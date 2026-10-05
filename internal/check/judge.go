@@ -3,12 +3,16 @@ package check
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 
 	"github.com/tools4imps/qualm/internal/config"
 	"github.com/tools4imps/qualm/internal/gitdiff"
@@ -50,14 +54,28 @@ var languages = map[string]string{
 }
 
 // judge asks Jev about one run's files. Workers share it, and nothing in it changes after
-// newJudge except the budget, which locks itself.
+// newJudge except the budget, which locks itself, and the warnings, which warn locks.
 type judge struct {
 	client *jev.Client
-	cache  jev.Cache // with no directory when the cache is off: it then never hits and stores nothing
+	cache  jev.Cache // with no directory when the cache is off
 	budget *jev.Budget
 	model  string
 	qs     []questions.Question
 	jobs   int
+
+	mu       sync.Mutex
+	warnings []string
+}
+
+// warn notes something the user should hear of that left the verdict as it is. The same thing is
+// noted once however often it happens.
+func (j *judge) warn(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if !slices.Contains(j.warnings, msg) {
+		j.warnings = append(j.warnings, msg)
+	}
 }
 
 // newJudge gathers what asking needs from the options and the config.
@@ -111,36 +129,78 @@ func (j *judge) request(path, change string, qs []questions.Question) jev.Reques
 	return jev.Request{Model: j.model, State: state, Questions: wire}
 }
 
-// file judges one changed file: it asks every question about the change, piece by piece when the
-// change is large, and notes the gates the answers failed.
-func (j *judge) file(ctx context.Context, f *File, c gitdiff.Change) error {
-	var replies []jev.Reply
-	for _, piece := range gitdiff.Split(c.Diff, pieceLimit) {
-		reply, err := j.ask(ctx, j.request(c.Path, piece, j.qs), j.qs)
-		if err != nil {
-			return err
-		}
-		replies = append(replies, reply)
+// file judges one changed file: it asks every question about the change and notes the gates the
+// answers failed.
+func (j *judge) file(ctx context.Context, f *File, diff string) (err error) {
+	if f.Answers, err = j.answers(ctx, f.Path, diff, j.qs); err != nil {
+		return err
 	}
-	f.Answers = combine(j.qs, replies)
 	f.Failed = failed(j.qs, f.Answers)
 	return nil
 }
 
+// answers asks qs about a change, or a part of one, to the file at path. A change over the piece
+// limit is asked piece by piece, and the replies are folded into one answer per question.
+func (j *judge) answers(ctx context.Context, path, change string, qs []questions.Question) (map[string]jev.Answer, error) {
+	var replies []jev.Reply
+	for _, piece := range gitdiff.Split(change, pieceLimit) {
+		reply, err := j.ask(ctx, j.request(path, piece, qs), qs)
+		if err != nil {
+			return nil, err
+		}
+		replies = append(replies, reply)
+	}
+	return combine(qs, replies), nil
+}
+
 // ask answers a request from the cache when it can, and from Jev when it can't.
 func (j *judge) ask(ctx context.Context, req jev.Request, asked []questions.Question) (jev.Reply, error) {
-	key := jev.Key(req)
-	if reply, ok := j.cache.Get(key); ok {
+	key := cacheKey(req, asked)
+	if reply, ok := j.cache.Get(key); ok && answersAll(reply, asked) {
 		return reply, nil
 	}
 	reply, err := j.settled(ctx, req, asked)
 	if err != nil {
 		return jev.Reply{}, err
 	}
-	// A failed write costs a request next time and changes no answer, so the run carries on. With
-	// the cache off every write fails, which is how nothing gets stored.
-	_ = j.cache.Put(key, reply)
+	j.store(key, reply)
 	return reply, nil
+}
+
+// store caches a settled reply, unless the cache is off. A failed write changes no answer, so the
+// run carries on, but the user pays for the same requests on every run until they hear of it.
+func (j *judge) store(key string, reply jev.Reply) {
+	if j.cache.Dir == "" {
+		return
+	}
+	if err := j.cache.Put(key, reply); err != nil {
+		j.warn("the cache at %s couldn't be written, so answers won't be reused", j.cache.Dir)
+	}
+}
+
+// cacheKey names the cache entry for a request's settled answers. An answer is settled against
+// the gate thresholds, and one cached as it came at 0.6 could have been a close call at 0.7. So
+// the key covers each gating question's threshold as well as the request.
+func cacheKey(req jev.Request, asked []questions.Question) string {
+	h := sha256.New()
+	io.WriteString(h, jev.Key(req))
+	for _, q := range asked {
+		if q.Gates {
+			fmt.Fprintf(h, "\n%q %v", q.ID, q.Threshold)
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// answersAll reports whether a cached reply holds a value from 0 to 1 for every question asked.
+// An entry that doesn't is damaged, and trusting it could pass a file nobody judged.
+func answersAll(reply jev.Reply, asked []questions.Question) bool {
+	for _, q := range asked {
+		if a, ok := reply.Answers[q.ID]; !ok || a.Value < 0 || a.Value > 1 {
+			return false
+		}
+	}
+	return true
 }
 
 // settled asks Jev and steadies a close call. Jev's answers move a little between identical

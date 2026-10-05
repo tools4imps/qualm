@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -30,6 +31,9 @@ const pricePerMillion = 0.042
 // CostOf prices input tokens in dollars. It is the cost of a reply that reports none, and the
 // estimate for a request that is not sent.
 func CostOf(inputTokens int) float64 { return float64(inputTokens) * pricePerMillion / 1e6 }
+
+// TokensIn estimates the input tokens in that many bytes of a request, at three bytes a token.
+func TokensIn(bytes int) int { return bytes / 3 }
 
 const (
 	maxAttempts  = 4
@@ -103,7 +107,7 @@ func (c *Client) Ask(ctx context.Context, req Request, asked []questions.Questio
 			}
 			lastErr = err
 		case status == http.StatusOK:
-			return parseReply(raw, asked)
+			return parseReply(raw, asked, len(body))
 		case retryable[status]:
 			lastErr = fmt.Errorf("jev answered HTTP %d", status)
 		default:
@@ -148,9 +152,7 @@ func (c *Client) once(ctx context.Context, body []byte) ([]byte, int, error) {
 	hreq.Header.Set("Content-Type", "application/json")
 	resp, err := httpClient.Do(hreq)
 	if err != nil {
-		// The cause of a transport error is a *url.Error that carries the URL and no headers, but
-		// only its type is kept, to be safe about what an odd endpoint could put in it.
-		return nil, 0, errors.New("jev: the request could not be completed")
+		return nil, 0, transportError(err, "jev: the request could not be completed")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -159,12 +161,23 @@ func (c *Client) once(ctx context.Context, body []byte) ([]byte, int, error) {
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxReplySize+1))
 	if err != nil {
-		return nil, 0, errors.New("jev: the reply could not be read")
+		return nil, 0, transportError(err, "jev: the reply could not be read")
 	}
 	if len(data) > maxReplySize {
 		return nil, 0, errors.New("jev: the reply is too large")
 	}
 	return data, resp.StatusCode, nil
+}
+
+// transportError says a request timed out when it did, and otherwise what the caller says of it.
+// The cause is a *url.Error that carries the URL and no headers, but nothing of its text is kept,
+// to be safe about what an odd endpoint could put in it.
+func transportError(cause error, otherwise string) error {
+	var timeout net.Error
+	if errors.As(cause, &timeout) && timeout.Timeout() {
+		return errors.New("jev: the request timed out")
+	}
+	return errors.New(otherwise)
 }
 
 type rawAnswer struct {
@@ -176,26 +189,35 @@ type rawAnswer struct {
 
 type rawReply struct {
 	Answers map[string]rawAnswer `json:"answers"`
-	Usage   struct {
-		InputTokens int      `json:"input_tokens"`
-		Cost        *float64 `json:"cost"`
-	} `json:"usage"`
+	Usage   rawUsage             `json:"usage"`
+}
+
+type rawUsage struct {
+	InputTokens int      `json:"input_tokens"`
+	Cost        *float64 `json:"cost"`
+}
+
+// spent is the input tokens and the dollars a reply cost. One that reports no cost is priced by
+// its tokens. One that reports neither is priced by the size of the request, sent bytes, so that
+// the budget still counts it.
+func (u rawUsage) spent(sent int) (inputTokens int, cost float64) {
+	if u.Cost != nil && *u.Cost > 0 {
+		return u.InputTokens, *u.Cost
+	}
+	inputTokens = cmp.Or(u.InputTokens, TokensIn(sent))
+	return inputTokens, CostOf(inputTokens)
 }
 
 func inUnit(v float64) bool { return v >= 0 && v <= 1 }
 
-// parseReply never quotes the body in its errors.
-func parseReply(data []byte, asked []questions.Question) (Reply, error) {
+// parseReply reads the reply to a request of sent bytes. It never quotes the body in its errors.
+func parseReply(data []byte, asked []questions.Question, sent int) (Reply, error) {
 	var raw rawReply
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return Reply{}, errors.New("jev: the reply is not the JSON that was expected")
 	}
-	out := Reply{Answers: make(map[string]Answer, len(asked)), InputTokens: raw.Usage.InputTokens}
-	if raw.Usage.Cost != nil && *raw.Usage.Cost > 0 {
-		out.Cost = *raw.Usage.Cost
-	} else {
-		out.Cost = CostOf(raw.Usage.InputTokens)
-	}
+	out := Reply{Answers: make(map[string]Answer, len(asked))}
+	out.InputTokens, out.Cost = raw.Usage.spent(sent)
 
 	for _, q := range asked {
 		a, ok := raw.Answers[q.ID]

@@ -51,3 +51,18 @@ func TestBudgetCountsFromManyGoroutines(t *testing.T) {
 		t.Errorf("spent = %d, %d, %v", requests, tokens, cost)
 	}
 }
+
+// Contract: jev/J10
+func TestBudgetErrorShowsASmallLimitInFull(t *testing.T) {
+	b := NewBudget(0.0005)
+	b.Spend(Reply{InputTokens: 100, Cost: 0.002})
+	err := b.Allow()
+	if err == nil {
+		t.Fatal("Allow passed with the limit already spent")
+	}
+	for _, want := range []string{"$0.0020", "$0.0005"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q should hold %s", err, want)
+		}
+	}
+}

@@ -7,7 +7,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
+	"math"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/tools4imps/qualm/internal/check"
@@ -29,7 +32,7 @@ type Env struct {
 }
 
 const usage = `usage: qualm [flags] [PATH...]
-       qualm keep PATH... --reason TEXT
+       qualm keep PATH... --reason TEXT [--base REF]
 
 Commands:
   (none)  judge the changed files against the base and gate on Jev's answers
@@ -138,18 +141,33 @@ func parse(args []string) (*settings, error) {
 
 func (s *settings) isKeep() bool { return len(s.positional) > 0 && s.positional[0] == "keep" }
 
+// validate catches a value no run could mean. The number checks say what a good value is, so
+// that NaN, which is neither below a limit nor above it, fails them too.
 func (s *settings) validate() error {
 	switch {
 	case s.format != "text" && s.format != "json":
 		return fmt.Errorf("unknown format %q, want text or json", s.format)
-	case s.given["threshold"] && (s.threshold <= 0 || s.threshold > 1):
+	case s.given["threshold"] && !(s.threshold > 0 && s.threshold <= 1):
 		return errors.New("--threshold must be above 0 and at most 1")
 	case s.given["jobs"] && s.jobs < 1:
 		return errors.New("--jobs must be at least 1")
-	case s.given["budget"] && s.budget <= 0:
-		return errors.New("--budget must be above 0")
+	case s.given["budget"] && !(s.budget > 0 && s.budget <= math.MaxFloat64):
+		return errors.New("--budget must be a finite amount above 0")
 	case s.given["reason"] && !s.isKeep():
 		return errors.New("--reason belongs to the keep command")
+	case s.isKeep():
+		return s.strayFlag()
+	}
+	return nil
+}
+
+// strayFlag names a flag given with keep that only the check reads. Keeping with one is refused,
+// because a line that asks for a dry run and writes qualm.json all the same did what nobody meant.
+func (s *settings) strayFlag() error {
+	for _, name := range slices.Sorted(maps.Keys(s.given)) {
+		if name != "base" && name != "reason" {
+			return fmt.Errorf("--%s does not apply to the keep command", name)
+		}
 	}
 	return nil
 }

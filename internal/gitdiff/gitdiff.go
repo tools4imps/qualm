@@ -7,28 +7,68 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 )
 
-// Change is one changed file between the base and the working tree.
+// Change is one changed file between the base and the working tree, as far as the listing knows
+// it. Its diff is read apart, by Read, so that a file nobody will judge costs no more than its name.
 type Change struct {
-	Path   string // the path in the working tree
-	Diff   string // the normalised diff, empty for a binary file
-	Binary bool
-	Marked bool // git attributes mark it linguist-generated or linguist-vendored
+	Path      string // the path in the working tree
+	Marked    bool   // git attributes mark it linguist-generated or linguist-vendored
+	from      string // the path it was renamed from, empty for any other change
+	untracked bool
+}
+
+// Diff is what Read finds in one change: lines to judge, or one of the two reasons there are none.
+type Diff struct {
+	Text      string // the normalised diff
+	Binary    bool   // git calls the file binary
+	NoContent bool   // only the mode or the name changed, or the file is new and empty
 }
 
 // defaultBranches is the order in which an empty ref looks for the branch work is measured from.
 var defaultBranches = []string{"origin/HEAD", "origin/main", "origin/master", "main", "master"}
 
-// run executes git in dir and returns stdout. Every call carries -C and quotepath=off so the
+// settings go before the subcommand of every call. A path is read as it is written and never as a
+// pattern, since a file can be named ":x" or "*.rb". The rest pin what the user's configuration
+// could otherwise change and no flag of git diff reaches. Without autoRefreshIndex git lists a
+// file that was staged with a change and then put back, and has no diff to print for it.
+var settings = []string{
+	"--literal-pathspecs",
+	"-c", "core.quotepath=off",
+	"-c", "diff.suppressBlankEmpty=false",
+	"-c", "diff.noprefix=false",
+	"-c", "diff.mnemonicPrefix=false",
+	"-c", "diff.autoRefreshIndex=true",
+}
+
+// pinned opens every diff call. Colour, an external diff tool, a text conversion, another
+// algorithm, other prefixes or a submodule printed as a log would each make the same change read
+// differently on the next machine, or not read as a diff at all.
+var pinned = []string{
+	"diff", "--no-color", "--no-ext-diff", "--no-textconv", "--diff-algorithm=myers",
+	"--src-prefix=a/", "--dst-prefix=b/", "--inter-hunk-context=0", "--indent-heuristic",
+	"--submodule=short",
+}
+
+// diff runs git diff with the pinned options ahead of the given ones.
+func diff(dir string, okExit []int, args ...string) (string, error) {
+	return run(dir, "", okExit, slices.Concat(pinned, args)...)
+}
+
+// run executes git in dir and returns stdout. Every call carries -C and the settings, so the
 // result does not depend on the caller's working directory or configuration. okExit lists exit
 // codes besides 0 that count as success.
 func run(dir string, stdin string, okExit []int, args ...string) (string, error) {
-	full := append([]string{"-C", dir, "-c", "core.quotepath=off"}, args...)
-	cmd := exec.Command("git", full...)
+	cmd := exec.Command("git", slices.Concat([]string{"-C", dir}, settings, args)...)
+	// git reads more diff options from this variable and they win over the command line, so it
+	// is emptied for the child.
+	cmd.Env = append(os.Environ(), "GIT_DIFF_OPTS=")
 	var out, errb bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errb
 	if stdin != "" {
@@ -98,12 +138,38 @@ func Base(dir, ref string) (string, error) {
 const listed = "AMTR"
 
 // Changes lists the added, modified, renamed and untracked files between base and the working
-// tree of dir, narrowed to paths when any are given, sorted by path.
+// tree of dir, narrowed to paths when any are given, sorted by path. It reads no diff.
 func Changes(dir, base string, paths []string) ([]Change, error) {
-	spec := append([]string{"--"}, paths...)
+	changes, err := tracked(dir, base)
+	if err != nil {
+		return nil, err
+	}
+	untracked, err := run(dir, "", nil, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range strings.Split(untracked, "\x00") {
+		// Git lists a repository nested in this one, and a link to a directory, by name as it does
+		// a file. Neither has lines of its own, and git has no diff to print for one.
+		if p != "" && !isDir(filepath.Join(dir, filepath.FromSlash(p))) {
+			changes = append(changes, Change{Path: p, untracked: true})
+		}
+	}
+	if changes, err = narrow(dir, base, changes, paths); err != nil {
+		return nil, err
+	}
+	slices.SortFunc(changes, func(a, b Change) int { return cmp.Compare(a.Path, b.Path) })
+	if err := mark(dir, changes); err != nil {
+		return nil, err
+	}
+	return changes, nil
+}
 
+// tracked lists the changes git knows of between base and the working tree. It asks about the
+// whole tree, because git shown one side of a rename alone would call it a new file.
+func tracked(dir, base string) ([]Change, error) {
 	// --relative keeps names relative to dir, which is how the path arguments are read too.
-	names, err := run(dir, "", nil, append([]string{"diff", "--relative", "--name-status", "-M", "-z", base}, spec...)...)
+	names, err := diff(dir, nil, "--relative", "--name-status", "-M", "-z", base)
 	if err != nil {
 		return nil, err
 	}
@@ -120,52 +186,97 @@ func Changes(dir, base string, paths []string) ([]Change, error) {
 			return nil, errors.New("git diff: malformed name-status output")
 		}
 		if strings.IndexByte(listed, code) >= 0 {
-			// A rename is asked for by both paths, so that git pairs them again.
-			raw, err := run(dir, "", nil, append([]string{"diff", "--relative", "-U8", "-M", base, "--"}, toks[i+1:i+1+n]...)...)
-			if err != nil {
-				return nil, err
+			c := Change{Path: toks[i+n]}
+			if code == 'R' {
+				c.from = toks[i+1]
 			}
-			changes = append(changes, build(toks[i+n], raw))
+			changes = append(changes, c)
 		}
 		i += 1 + n
-	}
-
-	untracked, err := run(dir, "", nil, append([]string{"ls-files", "--others", "--exclude-standard", "-z"}, spec...)...)
-	if err != nil {
-		return nil, err
-	}
-
-	for _, p := range strings.Split(untracked, "\x00") {
-		if p == "" {
-			continue
-		}
-		// --no-index exits 1 when the files differ, which is the case we are asking about.
-		raw, err := run(dir, "", []int{1}, "diff", "--no-index", "-U8", "--", "/dev/null", p)
-		if err != nil {
-			return nil, err
-		}
-		changes = append(changes, build(p, raw))
-	}
-
-	slices.SortFunc(changes, func(a, b Change) int { return cmp.Compare(a.Path, b.Path) })
-	if err := mark(dir, changes); err != nil {
-		return nil, err
 	}
 	return changes, nil
 }
 
-// build normalises a raw diff and notes whether git called the file binary.
-func build(path, raw string) Change {
-	c := Change{Path: path, Diff: normalise(raw)}
-	if c.Diff == "" {
-		for _, l := range strings.Split(raw, "\n") {
-			if strings.HasPrefix(l, "Binary files ") {
-				c.Binary = true
-				break
-			}
+// narrow keeps the changes that the path arguments select, and all of them when there are no
+// arguments. An argument that selects nothing is a mistake unless it names something that is
+// there to be unchanged, so a mistyped path can't pass for a clean run.
+func narrow(dir, base string, changes []Change, args []string) ([]Change, error) {
+	if len(args) == 0 {
+		return changes, nil
+	}
+	for _, arg := range args {
+		if !slices.ContainsFunc(changes, func(c Change) bool { return selects(arg, c.Path) }) && !exists(dir, base, arg) {
+			return nil, fmt.Errorf("no such path: %s", arg)
 		}
 	}
-	return c
+	return slices.DeleteFunc(changes, func(c Change) bool {
+		return !slices.ContainsFunc(args, func(arg string) bool { return selects(arg, c.Path) })
+	}), nil
+}
+
+// selects reports whether a path argument names the file or a directory above it.
+func selects(arg, file string) bool {
+	arg = path.Clean(arg)
+	return arg == "." || arg == file || strings.HasPrefix(file, arg+"/")
+}
+
+// exists reports whether a path relative to dir is in the working tree or in the base commit.
+func exists(dir, base, p string) bool {
+	if _, err := os.Lstat(filepath.Join(dir, filepath.FromSlash(p))); err == nil {
+		return true
+	}
+	// "./" makes git read the path from dir, as it reads every other path here.
+	_, err := run(dir, "", nil, "cat-file", "-e", base+":./"+p)
+	return err == nil
+}
+
+// Read reads the diff of one change that Changes listed for the same dir and base. A diff with no
+// hunks is taken for what it says only when git gives the reason. Anything else is a diff that
+// could not be read, and it is an error so that it never passes for a change with nothing in it.
+func Read(dir, base string, c Change) (Diff, error) {
+	raw, err := c.raw(dir, base)
+	if err != nil {
+		return Diff{}, err
+	}
+	has := func(prefix string) bool { return lineStart(raw, prefix) >= 0 }
+	switch text := normalise(raw); {
+	case text != "":
+		return Diff{Text: text}, nil
+	case has("Binary files "):
+		return Diff{Binary: true}, nil
+	case has("old mode ") && has("new mode "), // the mode alone changed
+		has("similarity index 100%"), // a rename with no edit
+		has("new file mode ") && isEmpty(filepath.Join(dir, filepath.FromSlash(c.Path))):
+		return Diff{NoContent: true}, nil
+	}
+	return Diff{}, fmt.Errorf("git printed no diff that can be read for %s", c.Path)
+}
+
+// isDir reports whether file is a directory, or a link to one.
+func isDir(file string) bool {
+	info, err := os.Stat(file)
+	return err == nil && info.IsDir()
+}
+
+// isEmpty reports whether file is a regular file with nothing in it. A new file's diff has no
+// hunks only then.
+func isEmpty(file string) bool {
+	info, err := os.Lstat(file)
+	return err == nil && info.Mode().IsRegular() && info.Size() == 0
+}
+
+// raw is the change's diff as git prints it.
+func (c Change) raw(dir, base string) (string, error) {
+	if c.untracked {
+		// --no-index exits 1 when the files differ, which is the case we are asking about.
+		return diff(dir, []int{1}, "--no-index", "-U8", "--", "/dev/null", c.Path)
+	}
+	args := []string{"--relative", "-U8", "-M", base, "--"}
+	if c.from != "" {
+		// A rename is asked for by both paths, so that git pairs them again.
+		args = append(args, c.from)
+	}
+	return diff(dir, nil, append(args, c.Path)...)
 }
 
 // mark sets Marked on the changes whose attributes call them generated or vendored. The names go

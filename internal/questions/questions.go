@@ -57,7 +57,8 @@ func Builtin() []Question {
 }
 
 // Resolve applies a config to the built-in set. gateID "" keeps push_back as the gate, and
-// gateThreshold 0 keeps the gate's threshold as it is. A config question with no role is a
+// gateThreshold 0 keeps the gate's threshold as it is, which for a question newly named as the
+// gate is its own when it has one and the default otherwise. A config question with no role is a
 // diagnosis, or a gate when it gates.
 func Resolve(gateID string, gateThreshold float64, drop []string, extra []Question) ([]Question, error) {
 	qs := Builtin()
@@ -95,7 +96,7 @@ func Resolve(gateID string, gateThreshold float64, drop []string, extra []Questi
 		if i < 0 {
 			return nil, fmt.Errorf("gate names unknown question %q", gateID)
 		}
-		qs[i].Gates, qs[i].Role, qs[i].Threshold = true, RoleGate, cmp.Or(gateThreshold, defaultThreshold)
+		qs[i].Gates, qs[i].Role, qs[i].Threshold = true, RoleGate, cmp.Or(gateThreshold, qs[i].Threshold, defaultThreshold)
 		// The old gate stops gating but its answer still shows as a diagnosis.
 		if p := indexOf(qs, defaultGate); p >= 0 {
 			qs[p].Gates, qs[p].Role, qs[p].Threshold = false, RoleDiagnosis, 0
@@ -146,6 +147,10 @@ func (q Question) validate() error {
 		}
 	default:
 		return fmt.Errorf("question %q has unknown type %q", q.ID, q.Type)
+	}
+	// Resolve has given a role to a question written without one.
+	if q.Role != RoleGate && q.Role != RoleDescribes && q.Role != RoleDiagnosis {
+		return fmt.Errorf("question %q has unknown role %q, want gate, describes or diagnosis", q.ID, q.Role)
 	}
 	if q.Gates {
 		if q.Type == TypeChoice {

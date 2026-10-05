@@ -50,7 +50,7 @@ The exact wording is in [`internal/questions/builtin.json`](internal/questions/b
 
 The run fails when any changed file scores 0.6 or higher on `push_back`. The other nine answers can't fail a run by default. They are there to say why.
 
-Jev's answers move a little between identical calls, by 0.03 at most in our tests. So when a gate answer lands within 0.05 of the threshold, qualm asks twice more and takes the middle value. A change that passes on your machine passes in CI.
+Jev's answers move a little between identical calls, by 0.03 at most in our tests. So when a gate answer lands within 0.05 of the threshold, qualm asks twice more and takes the middle value. That keeps a run on your machine and a run in CI from disagreeing over a hair.
 
 ## Reading the report
 
@@ -58,13 +58,13 @@ A passing run prints one line. A failing run names each file, the answers that m
 
 ```text
 qualm: 1 of 9 changed files drew a qualm.
+Skipped 10 files: 8 test, 2 prose or data.
 
-lib/mutineer/coverage_map.rb  push back 0.64
-  harder 0.99
-  grew a big unit 0.85           lines 327-577
-  added copies 0.76              lines 327-577
-  added impossible guards 0.66   lines 327-577
-  added unused flexibility 0.50  lines 327-577
+lib/mutineer/coverage_map.rb  push back 0.65
+  harder 1.00
+  grew a big unit 0.85          lines 327-577
+  added copies 0.74             lines 327-577
+  added impossible guards 0.65  lines 327-577
 
 What to do
   A reviewer would likely ask for this change to be simplified before it merges.
@@ -72,7 +72,6 @@ What to do
     grew_a_big_unit: Did the change make an already long function or class longer, where the new work could have gone in a unit of its own?
     added_copies: Did the change add logic that is a near-copy of logic already in the file?
     added_impossible_guards: Did the change add checks or fallbacks for states the surrounding code shows can't happen?
-    added_unused_flexibility: Did the change add options, hooks or indirection that the file uses in only one place?
   Rework the change so they no longer apply, then run qualm again.
   A qualm is an opinion. If the change is right as it stands, a person can keep it:
     qualm keep lib/mutineer/coverage_map.rb --reason "..."
@@ -92,9 +91,9 @@ A qualm is an opinion, and sometimes the code is right as it stands. When a pers
 qualm keep lib/matcher.rb --reason "The algorithm is this complicated"
 ```
 
-That records the path, a hash of the exact diff, the reason and the date under `keeps` in `qualm.json`. A keep binds to that exact diff, so one more edit to the file reopens the question. Once the pull request merges, the keep matches nothing, and the next `qualm keep` clears it out.
+That records the path, a hash of the change, the reason and the date under `keeps` in `qualm.json`. A keep binds to the lines the change adds and removes. Edit any of them and the question reopens. A change somewhere else in the file on the base branch leaves the keep standing. Once the pull request merges, the keep matches nothing, and the next `qualm keep` clears it out.
 
-Nothing stops an agent from keeping its own change. The safeguard is that a keep is a visible change to `qualm.json`, which a team can put behind a required human review.
+Nothing stops an agent from keeping its own change, or from marking a file generated in `.gitattributes` so it is skipped. The safeguard is that both are visible changes to a file, and the report counts what it skipped and why. A team can put `qualm.json` and `.gitattributes` behind a required human review.
 
 ## The config
 
@@ -126,7 +125,7 @@ A question's `type` is `noul` for yes or no, `score` for ordered levels listed i
 
 ## What it skips
 
-Deleted and binary files. Vendored and built directories. Lockfiles and generated files, including anything git marks `linguist-generated`. Prose and data such as Markdown, JSON and YAML. Tests, unless you pass `--include-tests`.
+Deleted and binary files, and files with no content change. Vendored and built directories. Lockfiles and generated files, including anything git marks `linguist-generated`. Prose and data such as Markdown, JSON and YAML. Tests, unless you pass `--include-tests`. The report's second line counts what was skipped and why. A changed file whose diff can't be read stops the run with exit 2.
 
 ## What it costs
 
@@ -178,7 +177,7 @@ That is the whole of the evidence. It is one codebase in one language, and nobod
 
 ## How qualm holds itself to this
 
-qualm has its own Contract in `contract/`: 77 numbered obligations across nine primitives (skip, diff, questions, config, jev, judge, gate, report and cli). Every obligation has at least one test that names it with a `// Contract: <primitive>/<id>` comment. A test in `internal/contractcheck` publishes contract coverage and fails while any obligation lacks a test.
+qualm has its own Contract in `contract/`: 89 numbered obligations across nine primitives (skip, diff, questions, config, jev, judge, gate, report and cli). Every obligation has at least one test that names it with a `// Contract: <primitive>/<id>` comment. A test in `internal/contractcheck` publishes contract coverage and fails while any obligation lacks a test.
 
 The tests are held to account too. [Gremlins](https://github.com/go-gremlins/gremlins) mutates every package and reruns the suite. The tests kill 314 mutants, and the 7 that survive are each explained in [`docs/mutation.md`](docs/mutation.md).
 
@@ -187,6 +186,8 @@ Before a release, qualm runs on its own change.
 ## Known limits in 0.1
 
 - It talks to Jev through OpenRouter only.
+- A submodule bump and a symlink's target are judged as if they were a file's text.
+- A custom diff driver set through git attributes can change the text after `@@` in a hunk header, which changes the cache key from one machine to the next. Keeps aren't affected.
 - It judges one file at a time, so it can't see that a change copied logic from another file. exhale catches that for Ruby.
 - The threshold rests on one codebase's history.
 - A failing file is asked about again hunk by hunk to find where each diagnosis points, which costs one more request per hunk.

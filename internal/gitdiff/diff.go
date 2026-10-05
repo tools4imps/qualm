@@ -1,6 +1,7 @@
 package gitdiff
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -11,14 +12,30 @@ type Hunk struct {
 	Start, End int    // the first and last line it covers in the new file
 }
 
-// normalise drops every line before the first line that starts with "--- ". Those lines carry
-// blob hashes and modes that differ between machines. A diff with no such line, which is what git
-// prints for a binary file or a pure rename, normalises to "".
+// gitHeaders start the lines git puts around a file's hunks. They carry blob hashes and modes that
+// differ between machines.
+var gitHeaders = []string{
+	"diff --git ", "index ", "old mode ", "new mode ", "new file mode ", "deleted file mode ",
+	"similarity index ", "dissimilarity index ", "rename from ", "rename to ", "copy from ", "copy to ",
+}
+
+// normalise drops every line before the first that starts with "--- ", and every one of git's
+// header lines after it, which a file that changes type has in the middle. A line inside a hunk
+// starts with a space, "+", "-" or "\", so none of a file's own lines can be taken for a header.
+// A diff with no "--- " line, which is what git prints for a binary file or a pure rename,
+// normalises to "".
 func normalise(raw string) string {
-	if i := lineStart(raw, "--- "); i >= 0 {
-		return raw[i:]
+	i := lineStart(raw, "--- ")
+	if i < 0 {
+		return ""
 	}
-	return ""
+	var b strings.Builder
+	for _, line := range strings.SplitAfter(raw[i:], "\n") {
+		if !slices.ContainsFunc(gitHeaders, func(h string) bool { return strings.HasPrefix(line, h) }) {
+			b.WriteString(line)
+		}
+	}
+	return b.String()
 }
 
 // lineStart is where the first line of s that starts with prefix begins, or -1 when none does.

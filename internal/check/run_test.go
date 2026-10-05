@@ -256,6 +256,7 @@ func skips(t *testing.T) (*repo, map[string]string) {
 		".gitattributes": "gen/** linguist-generated\next/** linguist-vendored=true\n",
 		"qualm.json":     `{"skip": ["db/schema.rb", "**/*.snap.go"]}`,
 		"tool.sh":        "echo hi\n",
+		"old.sh":         "echo old\n",
 	})
 	binary := "\x00\x01\x02 not text \x00"
 	r.write("lib/a.rb", "puts 1\n")
@@ -270,18 +271,23 @@ func skips(t *testing.T) (*repo, map[string]string) {
 		"img/logo.dat":      {binary, "binary"},
 		"gen/api.go":        {"package gen\n", "marked generated or vendored"},
 		"ext/lib.go":        {"package ext\n", "marked generated or vendored"},
-		// A rule is looked at before the content, and the content before the mark.
+		// A rule is looked at before the mark, and the mark before the content.
 		"vendor/blob.go": {binary, "vendored or built"},
-		"gen/blob.go":    {binary, "binary"},
+		"gen/blob.go":    {binary, "marked generated or vendored"},
 	} {
 		r.write(path, why[0])
 		reasons[path] = why[1]
 	}
-	// A change of mode alone leaves git with no lines to show.
+	// A change of mode alone, a rename as it is and a new file with nothing in it leave git with
+	// no lines to show.
 	if err := os.Chmod(r.path("tool.sh"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	reasons["tool.sh"] = "no content change"
+	r.git("mv", "old.sh", "moved.sh")
+	r.write("lib/empty.rb", "")
+	for _, path := range []string{"tool.sh", "moved.sh", "lib/empty.rb"} {
+		reasons[path] = "no content change"
+	}
 	return r, reasons
 }
 
@@ -317,21 +323,19 @@ func TestRunSkipsWhatARuleTheContentOrAMarkRulesOutAndSendsNoneOfIt(t *testing.T
 }
 
 // Contract: gate/G3
-func TestRunReportsTheSizeOfEveryDiffItHas(t *testing.T) {
+func TestRunReportsTheSizeOfEveryDiffItReads(t *testing.T) {
 	t.Parallel()
 	r, _ := skips(t)
 	f := newFake(t, nil)
 
 	res := mustRun(t, r.options(f))
 
-	for _, path := range []string{"lib/a.rb", "README.md", "vendor/dep/dep.go", "gen/api.go"} {
-		if got, want := file(t, res, path).Bytes, len(r.diff(path)); got != want || want == 0 {
-			t.Errorf("%s is %d bytes, want the %d of its diff", path, got, want)
-		}
+	if got, want := file(t, res, "lib/a.rb").Bytes, len(r.diff("lib/a.rb")); got != want || want == 0 {
+		t.Errorf("lib/a.rb is %d bytes, want the %d of its diff", got, want)
 	}
-	for _, path := range []string{"img/logo.dat", "tool.sh"} {
+	for _, path := range []string{"README.md", "vendor/dep/dep.go", "gen/api.go", "img/logo.dat", "tool.sh", "moved.sh", "lib/empty.rb"} {
 		if got := file(t, res, path).Bytes; got != 0 {
-			t.Errorf("%s is %d bytes, want 0 for a change with no diff", path, got)
+			t.Errorf("%s is %d bytes, want 0 for a diff that was never read or has no lines", path, got)
 		}
 	}
 }
@@ -351,6 +355,79 @@ func TestRunJudgesTestsWhenAskedTo(t *testing.T) {
 	}
 	if f.count() != 2 {
 		t.Errorf("made %d requests, want one each for lib/a.rb and lib/a_test.rb", f.count())
+	}
+}
+
+// Contract: gate/G13
+func TestRunNeverReadsTheDiffOfAFileARuleOrAMarkSkips(t *testing.T) {
+	for name, dry := range map[string]bool{"a full run": false, "a dry run": true} {
+		t.Run(name, func(t *testing.T) {
+			r, reasons := skips(t)
+			f := newFake(t, nil)
+			o := r.options(f)
+			o.DryRun = dry
+			reads := spyGit(t)
+
+			res := mustRun(t, o)
+
+			// What a file holds is only known from its diff, so those two skips come after a read.
+			read := map[string]bool{"lib/a.rb": true}
+			for path, why := range reasons {
+				read[path] = why == "binary" || why == "no content change"
+			}
+			for path, want := range read {
+				got := false
+				for _, call := range reads() {
+					got = got || strings.HasSuffix(call, " "+path)
+				}
+				if got != want {
+					t.Errorf("the diff of %s was read: %v, want %v (%q)", path, got, want, file(t, res, path).Reason)
+				}
+			}
+			if len(reads()) != 5 {
+				t.Errorf("read %d diffs, want 5:\n%s", len(reads()), strings.Join(reads(), "\n"))
+			}
+		})
+	}
+}
+
+// Contract: diff/D13
+func TestRunJudgesTheSameChangesUnderGitSettingsThatUsedToHideThem(t *testing.T) {
+	r := newRepo(t, map[string]string{"lib/a.rb": numbered(30), "lib/b.rb": numbered(30)})
+	r.write("lib/a.rb", edited(30, 10))
+	r.write("lib/b.rb", edited(30, 20))
+	want := []string{r.diff("lib/a.rb"), r.diff("lib/b.rb")}
+	for _, setting := range []string{"color.ui=always", "diff.external=/bin/echo"} {
+		t.Run(setting, func(t *testing.T) {
+			key, value, _ := strings.Cut(setting, "=")
+			r.git("config", key, value)
+			defer r.git("config", "--unset", key)
+			f := newFake(t, says(map[string]float64{"push_back": 0.9}))
+
+			res := mustRun(t, r.options(f))
+
+			for i, path := range []string{"lib/a.rb", "lib/b.rb"} {
+				if got := file(t, res, path); got.Status != "judged" || len(got.Failed) != 1 {
+					t.Errorf("%s is %s (%q) failing %v, want judged and failing", path, got.Status, got.Reason, got.Failed)
+				}
+				f.callWith(want[i])
+			}
+		})
+	}
+}
+
+// Contract: diff/D15
+func TestRunStopsWhenAChangedFilesDiffCantBeRead(t *testing.T) {
+	r := oneChange(t)
+	f := newFake(t, nil)
+	o := r.options(f)
+	// A git that prints nothing for a file's diff, as a diff tool that fails quietly would.
+	wrapGit(t, `case "$*" in *-U8*) exit 0 ;; esac; exec "$REAL_GIT" "$@"`)
+
+	refused(t, o, "a.go")
+
+	if f.count() != 0 {
+		t.Errorf("made %d requests, want none", f.count())
 	}
 }
 
@@ -394,6 +471,57 @@ func TestRunKeepsAFileWhoseExactChangeAKeepNamesAndJudgesItOnceItChanges(t *test
 }
 
 // Contract: gate/G4
+func TestRunHonoursAKeepMadeUnderOtherGitSettings(t *testing.T) {
+	t.Parallel()
+	// The two texts of Myers's paper, which git's histogram algorithm diffs another way.
+	r := newRepo(t, map[string]string{"algo.rb": "A\nB\nC\nA\nB\nB\nA\n"})
+	r.write("algo.rb", "C\nB\nA\nB\nA\nC\n")
+	r.keeps(r.keepOf("algo.rb", "fine as it is"))
+	r.git("config", "diff.algorithm", "histogram")
+	f := newFake(t, says(map[string]float64{"push_back": 0.95}))
+
+	res := mustRun(t, r.options(f))
+
+	if got := file(t, res, "algo.rb"); got.Status != "kept" || f.count() != 0 || len(res.StaleKeeps) != 0 {
+		t.Errorf("algo.rb is %s after %d requests with stale keeps %v, want it kept", got.Status, f.count(), res.StaleKeeps)
+	}
+}
+
+// Contract: gate/G4
+func TestRunStillKeepsAFileWhenTheBaseChangesItSomewhereElse(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t, map[string]string{"a.go": numbered(60)})
+	r.write("a.go", edited(60, 55))
+	keep := r.keepOf("a.go", "fine as it is")
+	r.keeps(keep)
+	r.commit("the kept change")
+	// Main gains a line at the top of the same file, which moves every line number below it.
+	r.git("checkout", "-q", "main")
+	r.write("a.go", "a new first line\n"+numbered(60))
+	r.commit("main moves on")
+	r.git("checkout", "-q", "feature")
+	r.git("merge", "-q", "--no-edit", "main")
+	f := newFake(t, says(map[string]float64{"push_back": 0.95}))
+	o := r.options(f)
+
+	res := mustRun(t, o)
+
+	if got := file(t, res, "a.go"); got.Status != "kept" || f.count() != 0 || len(res.StaleKeeps) != 0 {
+		t.Errorf("a.go is %s after %d requests with stale keeps %v, want it still kept", got.Status, f.count(), res.StaleKeeps)
+	}
+
+	r.write("a.go", "a new first line\n"+strings.Replace(numbered(60), "line 55\n", "changed once more 55\n", 1))
+	res = mustRun(t, o)
+
+	if got := file(t, res, "a.go"); got.Status != "judged" || len(got.Failed) != 1 || f.count() != 1 {
+		t.Errorf("with a kept line changed a.go is %s failing %v after %d requests, want it judged again", got.Status, got.Failed, f.count())
+	}
+	if !reflect.DeepEqual(res.StaleKeeps, []config.Keep{keep}) {
+		t.Errorf("stale keeps = %v, want the keep the edit left behind", res.StaleKeeps)
+	}
+}
+
+// Contract: gate/G4
 func TestRunDoesNotKeepAFileOnAKeepForAnotherPath(t *testing.T) {
 	t.Parallel()
 	r := oneChange(t)
@@ -413,20 +541,26 @@ func TestRunDoesNotKeepAFileOnAKeepForAnotherPath(t *testing.T) {
 }
 
 // Contract: gate/G4
-func TestRunSkipsBeforeItKeeps(t *testing.T) {
+// Contract: gate/G5
+func TestRunSkipsBeforeItKeepsAndLeavesTheKeepOfASkippedFileAlone(t *testing.T) {
 	t.Parallel()
 	r := newRepo(t, nil)
 	r.write("lib/a_test.rb", "assert true\n")
-	r.keeps(r.keepOf("lib/a_test.rb", "fine"))
+	r.write("lib/b_test.rb", "assert true\n")
+	// One keep matches its file's change and one doesn't. A skipped file's diff is never read, so
+	// the run can't tell them apart, and calls neither stale.
+	r.keeps(r.keepOf("lib/a_test.rb", "fine"), config.Keep{Path: "lib/b_test.rb", Change: "0b", Reason: "fine", Date: "2026-10-01"})
 	f := newFake(t, nil)
 
 	res := mustRun(t, r.options(f))
 
-	if got := file(t, res, "lib/a_test.rb"); got.Status != "skipped" || got.Reason != "test" {
-		t.Errorf("lib/a_test.rb is %s (%q), want skipped as a test", got.Status, got.Reason)
+	for _, path := range []string{"lib/a_test.rb", "lib/b_test.rb"} {
+		if got := file(t, res, path); got.Status != "skipped" || got.Reason != "test" {
+			t.Errorf("%s is %s (%q), want skipped as a test", path, got.Status, got.Reason)
+		}
 	}
 	if len(res.StaleKeeps) != 0 {
-		t.Errorf("stale keeps = %v, want none: the keep still matches the change", res.StaleKeeps)
+		t.Errorf("stale keeps = %v, want none: nothing was read to compare them with", res.StaleKeeps)
 	}
 }
 
@@ -442,7 +576,7 @@ func staleRepo(t *testing.T) (r *repo, live config.Keep, stale []config.Keep) {
 	stale = []config.Keep{
 		r.keepOf("b.go", "kept b"),
 		r.keepOf("c.go", "kept c"),
-		{Path: "gone.go", Change: changeHash("a diff that was"), Reason: "kept gone", Date: "2026-09-01"},
+		{Path: "gone.go", Change: "0d", Reason: "kept gone", Date: "2026-09-01"},
 	}
 	r.write("b.go", edited(5, 3, 4))
 	r.write("c.go", numbered(5))
@@ -503,10 +637,10 @@ func TestDryRunSendsNothingAndListsEveryFileWithItsStatusAndSize(t *testing.T) {
 				t.Fatalf("Run: %v", err)
 			}
 			want := []File{
-				{Path: "README.md", Status: "skipped", Reason: "prose or data", Bytes: len(r.diff("README.md"))},
+				{Path: "README.md", Status: "skipped", Reason: "prose or data"},
 				{Path: "a.go", Status: "kept", Reason: live.Reason, Bytes: len(r.diff("a.go"))},
 				{Path: "b.go", Status: "judged", Bytes: len(r.diff("b.go"))},
-				{Path: "qualm.json", Status: "skipped", Reason: "prose or data", Bytes: len(r.diff("qualm.json"))},
+				{Path: "qualm.json", Status: "skipped", Reason: "prose or data"},
 			}
 			if !reflect.DeepEqual(res.Files, want) {
 				t.Errorf("files = %+v, want %+v", res.Files, want)
@@ -640,35 +774,20 @@ func TestRunStopsWhenTheBudgetIsSpent(t *testing.T) {
 }
 
 // Contract: gate/G9
-func TestRunStopsWhenAskingAgainFails(t *testing.T) {
+func TestRunStopsWhenAskingACloseCallAgainFails(t *testing.T) {
 	t.Parallel()
-	cases := map[string]func(call) answer{
-		"a close call's second request": func(c call) answer {
-			if c.Nth == 2 {
-				return answer{status: 400}
-			}
-			return answer{values: map[string]float64{"push_back": 0.6}}
-		},
-		"a hunk's request": func(c call) answer {
-			if !whole(c) {
-				return answer{status: 400}
-			}
-			return answer{values: map[string]float64{"push_back": 0.9, "added_copies": 0.9}}
-		},
-	}
 	r := threeHunks(t)
-	for name, reply := range cases {
-		t.Run(name, func(t *testing.T) {
-			f := newFake(t, reply)
-			o := r.options(f)
-			o.Jobs = 1 // one hunk at a time, so the count of requests is exact
+	f := newFake(t, func(c call) answer {
+		if c.Nth == 2 {
+			return answer{status: 400}
+		}
+		return answer{values: map[string]float64{"push_back": 0.6}}
+	})
 
-			refused(t, o, "400")
+	refused(t, r.options(f), "400")
 
-			if f.count() != 2 {
-				t.Errorf("made %d requests, want the run to stop at the second", f.count())
-			}
-		})
+	if f.count() != 2 {
+		t.Errorf("made %d requests, want the run to stop at the close call's second", f.count())
 	}
 }
 

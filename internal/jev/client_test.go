@@ -243,7 +243,7 @@ func TestAScoreQuestionWithOneLevelIsAnError(t *testing.T) {
 	for _, score := range []string{"-1", "0", "0.5", "1"} {
 		body := `{"answers":{"flat":{"score":` + score + `}}}`
 
-		_, err := parseReply([]byte(body), []questions.Question{one})
+		_, err := parseReply([]byte(body), []questions.Question{one}, 0)
 
 		if err == nil || !strings.Contains(err.Error(), "flat") {
 			t.Errorf("score %s: err = %v, want one naming the question", score, err)
@@ -255,7 +255,7 @@ func TestAScoreQuestionWithOneLevelIsAnError(t *testing.T) {
 func TestAQuestionOfAnUnknownTypeIsAnError(t *testing.T) {
 	odd := questions.Question{ID: "odd", Type: "ranking", Instructions: "x"}
 
-	_, err := parseReply([]byte(`{"answers":{"odd":{"noul":0.5}}}`), []questions.Question{odd})
+	_, err := parseReply([]byte(`{"answers":{"odd":{"noul":0.5}}}`), []questions.Question{odd}, 0)
 
 	if err == nil || !strings.Contains(err.Error(), "ranking") {
 		t.Errorf("err = %v, want one naming the type", err)
@@ -321,17 +321,49 @@ func TestOtherFailuresAreNotRetried(t *testing.T) {
 }
 
 // Contract: jev/J5
+// Contract: jev/J6
 func TestTransportErrorsAreRetried(t *testing.T) {
 	srv := httptest.NewServer(http.NotFoundHandler())
 	url := srv.URL
 	srv.Close()
 	var waits []time.Duration
 	c := &Client{Endpoint: url, Key: testKey, Sleep: func(d time.Duration) { waits = append(waits, d) }}
-	if _, err := c.Ask(context.Background(), testRequest(), allQs); err == nil {
-		t.Fatal("want an error")
+	_, err := c.Ask(context.Background(), testRequest(), allQs)
+	// The message is fixed: what the connection said, and the address it was refused at, stay out.
+	if err == nil || err.Error() != "jev failed after 4 attempts: jev: the request could not be completed" {
+		t.Fatalf("err = %v", err)
 	}
 	if len(waits) != 3 {
 		t.Errorf("waits = %v", waits)
+	}
+}
+
+// Contract: jev/J6
+func TestATimeoutSaysItTimedOutAndNothingMore(t *testing.T) {
+	old := httpClient
+	httpClient = &http.Client{Timeout: 30 * time.Millisecond}
+	defer func() { httpClient = old }()
+	cases := map[string]func(w http.ResponseWriter){
+		"before any reply":         func(http.ResponseWriter) {},
+		"in the middle of a reply": func(w http.ResponseWriter) { w.WriteHeader(200); w.(http.Flusher).Flush() },
+	}
+	for name, begin := range cases {
+		t.Run(name, func(t *testing.T) {
+			done := make(chan struct{})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				begin(w)
+				<-done
+			}))
+			defer srv.Close()
+			defer close(done) // lets the handlers go, so the server can close
+			c := &Client{Endpoint: srv.URL, Key: testKey, Sleep: func(time.Duration) {}}
+
+			_, err := c.Ask(context.Background(), testRequest(), allQs)
+
+			if err == nil || err.Error() != "jev failed after 4 attempts: jev: the request timed out" {
+				t.Errorf("err = %v", err)
+			}
+		})
 	}
 }
 
@@ -412,14 +444,25 @@ func TestMalformedReplyErrorHoldsNoBody(t *testing.T) {
 
 // Contract: jev/J7
 func TestCostFromUsageOrFromTokens(t *testing.T) {
+	// A reply that says nothing of its size is taken to have read a token for every three bytes sent.
+	body, err := json.Marshal(testRequest())
+	if err != nil || len(body) < 90 {
+		t.Fatalf("the request is %d bytes, %v", len(body), err)
+	}
+	guess := len(body) / 3
 	cases := map[string]struct {
-		usage string
-		cost  float64
+		usage  string
+		tokens int
+		cost   float64
 	}{
-		"reported": {`{"input_tokens":1000,"cost":0.5}`, 0.5},
-		"absent":   {`{"input_tokens":1000000}`, 0.042},
-		"zero":     {`{"input_tokens":2000000,"cost":0}`, 0.084},
-		"no usage": {`null`, 0},
+		"reported":         {`{"input_tokens":1000,"cost":0.5}`, 1000, 0.5},
+		"absent":           {`{"input_tokens":1000000}`, 1000000, 0.042},
+		"zero":             {`{"input_tokens":2000000,"cost":0}`, 2000000, 0.084},
+		"a cost alone":     {`{"cost":0.5}`, 0, 0.5},
+		"no usage":         {`null`, guess, CostOf(guess)},
+		"an empty usage":   {`{}`, guess, CostOf(guess)},
+		"zeros for both":   {`{"input_tokens":0,"cost":0}`, guess, CostOf(guess)},
+		"a null cost only": {`{"cost":null}`, guess, CostOf(guess)},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -429,8 +472,11 @@ func TestCostFromUsageOrFromTokens(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if d := r.Cost - tc.cost; d > 1e-12 || d < -1e-12 {
+			if d := r.Cost - tc.cost; d > 1e-12 || d < -1e-12 || tc.cost == 0 {
 				t.Errorf("cost = %v, want %v", r.Cost, tc.cost)
+			}
+			if r.InputTokens != tc.tokens {
+				t.Errorf("input tokens = %d, want %d", r.InputTokens, tc.tokens)
 			}
 		})
 	}

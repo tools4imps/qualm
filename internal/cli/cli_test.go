@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -151,7 +152,8 @@ func newWorld(t *testing.T, pushBack float64) *world {
 	return &world{dir: newRepo(t), fake: newFakeJev(t, pushBack), key: "test-key"}
 }
 
-// run calls Run in the world with a private cache unless the arguments name one.
+// run calls Run in the world. A check gets a private cache unless the arguments name one. A keep
+// gets none, since it takes no flag of the check's.
 func (w *world) run(t *testing.T, args ...string) outcome {
 	t.Helper()
 	return w.runIn(t, w.dir, args...)
@@ -167,10 +169,8 @@ func (w *world) runIn(t *testing.T, dir string, args ...string) outcome {
 		return ""
 	}
 	full := append([]string{"--cache", t.TempDir()}, args...)
-	for _, a := range args {
-		if a == "--cache" {
-			full = args
-		}
+	if slices.Contains(args, "--cache") || slices.Contains(args, "keep") {
+		full = args
 	}
 	code := Run(full, Env{Dir: dir, Getenv: getenv, Stdout: &out, Stderr: &errb, Endpoint: w.fake.URL})
 	return outcome{code, out.String(), errb.String()}
@@ -192,7 +192,7 @@ func TestVersionIsExported(t *testing.T) {
 func TestKeepRecordsAndALaterCheckSkipsTheFile(t *testing.T) {
 	w := newWorld(t, 0.9)
 	cache := t.TempDir()
-	o := w.runCached(t, cache, "keep", "lib/a.go", "--reason", "it is fine")
+	o := w.run(t, "keep", "lib/a.go", "--reason", "it is fine")
 	if o.code != 0 || !strings.Contains(o.stdout, "qualm: kept lib/a.go") {
 		t.Fatalf("keep: %+v", o)
 	}
@@ -247,6 +247,28 @@ func TestExitCodeFollowsTheGate(t *testing.T) {
 	}
 }
 
+// Contract: cli/L2
+func TestAPathThatDoesNotExistExitsTwo(t *testing.T) {
+	w := newWorld(t, 0.2)
+	for _, args := range [][]string{{"lib/nosuch.go"}, {"lib/a.go", "nosuch"}, {"--dry-run", "lib/nosuch.go"}} {
+		o := w.run(t, args...)
+		if o.code != 2 || o.stdout != "" || !strings.HasPrefix(o.stderr, "qualm: no such path: ") {
+			t.Errorf("%v: %+v, want exit 2 and the path named on stderr", args, o)
+		}
+	}
+	if w.fake.count() != 0 {
+		t.Errorf("made %d requests, want none", w.fake.count())
+	}
+	// A path that is there and unchanged is no mistake.
+	write(t, w.dir, "lib/same.go", "package lib\n")
+	git(t, w.dir, "add", ".")
+	git(t, w.dir, "commit", "-q", "-m", "same")
+	git(t, w.dir, "branch", "-f", "main")
+	if o := w.run(t, "lib/same.go"); o.code != 0 || o.stdout != "qualm: nothing to judge.\n" {
+		t.Errorf("an unchanged path: %+v, want exit 0 and nothing to judge", o)
+	}
+}
+
 // Contract: cli/L3
 func TestBadFlagsExitTwoWithUsage(t *testing.T) {
 	cases := map[string][]string{
@@ -256,8 +278,14 @@ func TestBadFlagsExitTwoWithUsage(t *testing.T) {
 		"threshold zero":     {"--threshold", "0"},
 		"threshold over 1":   {"--threshold", "1.5"},
 		"threshold negative": {"--threshold", "-0.2"},
+		"threshold NaN":      {"--threshold", "NaN"},
+		"threshold infinite": {"--threshold", "Inf"},
 		"jobs zero":          {"--jobs", "0"},
 		"budget zero":        {"--budget", "0"},
+		"budget negative":    {"--budget", "-1"},
+		"budget NaN":         {"--budget", "NaN"},
+		"budget infinite":    {"--budget", "Inf"},
+		"budget -infinite":   {"--budget", "-Inf"},
 		"reason w/o keep":    {"--reason", "x"},
 	}
 	for name, args := range cases {
@@ -418,6 +446,49 @@ func TestKeepIsRecognisedOnlyAsTheFirstPath(t *testing.T) {
 	o := w.run(t, "lib/a.go", "keep", "--reason", "x")
 	if o.code != 2 {
 		t.Fatalf("keep after a path should be a stray --reason: %+v", o)
+	}
+}
+
+// Contract: cli/L11
+func TestKeepRefusesAFlagThatOnlyTheCheckReads(t *testing.T) {
+	cases := map[string][]string{
+		"--dry-run":       {"--dry-run"},
+		"--threshold":     {"--threshold", "0.5"},
+		"--include-tests": {"--include-tests"},
+		"--format":        {"--format", "json"},
+		"--cache":         {"--cache", t.TempDir()},
+		"--no-cache":      {"--no-cache"},
+		"--budget":        {"--budget", "2"},
+		"--jobs":          {"--jobs", "2"},
+	}
+	for flag, args := range cases {
+		t.Run(flag, func(t *testing.T) {
+			w := newWorld(t, 0.2)
+			for _, line := range [][]string{
+				append([]string{"keep", "lib/a.go", "--reason", "x"}, args...),
+				append(args, "keep", "lib/a.go", "--reason", "x"),
+			} {
+				o := w.run(t, line...)
+				if o.code != 2 || o.stdout != "" || !strings.HasPrefix(o.stderr, "qualm: "+flag+" ") || !strings.Contains(o.stderr, "usage: qualm") {
+					t.Errorf("%v: %+v, want exit 2 with the flag named and the usage on stderr", line, o)
+				}
+				if _, err := os.Stat(filepath.Join(w.dir, "qualm.json")); !os.IsNotExist(err) {
+					t.Errorf("%v wrote qualm.json, want nothing written", line)
+				}
+			}
+		})
+	}
+}
+
+// Contract: cli/L11
+func TestKeepTakesABaseAndAReason(t *testing.T) {
+	w := newWorld(t, 0.2)
+	o := w.run(t, "keep", "lib/a.go", "--reason", "x", "--base", "main")
+	if o.code != 0 || o.stdout != "qualm: kept lib/a.go\n" || o.stderr != "" {
+		t.Fatalf("%+v", o)
+	}
+	if cfg, err := config.Load(w.dir); err != nil || len(cfg.Keeps) != 1 {
+		t.Errorf("config %+v, err %v: want the keep written", cfg, err)
 	}
 }
 

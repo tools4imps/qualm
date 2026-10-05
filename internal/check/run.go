@@ -35,10 +35,14 @@ func Run(ctx context.Context, o Options) (Result, error) {
 		return Result{}, err
 	}
 	rules := skip.Rules{Extra: cfg.Skip, IncludeTests: o.IncludeTests}
-	res := Result{Base: base, Questions: qs, Files: classify(changes, rules, cfg.Keeps), DryRun: o.DryRun}
+	files, diffs, err := classify(o.Dir, base, changes, rules, cfg.Keeps)
+	if err != nil {
+		return Result{}, err
+	}
+	res := Result{Base: base, Questions: qs, Files: files, DryRun: o.DryRun}
 	if len(o.Paths) == 0 {
 		// A run narrowed to some paths can't see every change, so it can't call a keep stale.
-		res.StaleKeeps = stale(cfg.Keeps, changes)
+		res.StaleKeeps = stale(cfg.Keeps, files, diffs)
 	}
 	if o.DryRun || !anyJudged(res.Files) {
 		return res, nil
@@ -47,10 +51,10 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if err := j.all(ctx, res.Files, changes); err != nil {
+	if err := j.all(ctx, res.Files, diffs); err != nil {
 		return Result{}, err
 	}
-	res.Usage = j.usage()
+	res.Usage, res.Warnings = j.usage(), j.warnings
 	return res, nil
 }
 
@@ -83,44 +87,57 @@ func changesSince(dir, ref string, paths []string) (base string, changes []gitdi
 	return base, changes, nil
 }
 
-// classify lists a file for every change, in the same order, with what is to happen to it.
-func classify(changes []gitdiff.Change, rules skip.Rules, keeps []config.Keep) []File {
+// classify lists a file for every change, in the same order, with what is to happen to it, and
+// beside it the diff of each change it had to read to decide. A skip rule or a mark settles a file
+// from the listing alone, so the diff of such a file is never read.
+func classify(dir, base string, changes []gitdiff.Change, rules skip.Rules, keeps []config.Keep) ([]File, []string, error) {
 	files := make([]File, len(changes))
+	diffs := make([]string, len(changes))
 	for i, c := range changes {
-		status, reason := statusOf(c, rules, keeps)
-		files[i] = File{Path: c.Path, Status: status, Reason: reason, Bytes: len(c.Diff)}
+		files[i].Path = c.Path
+		if why := unreadReason(c, rules); why != "" {
+			files[i].Status, files[i].Reason = StatusSkipped, why
+			continue
+		}
+		d, err := gitdiff.Read(dir, base, c)
+		if err != nil {
+			return nil, nil, err
+		}
+		diffs[i], files[i].Bytes = d.Text, len(d.Text)
+		files[i].Status, files[i].Reason = statusOf(c.Path, d, keeps)
 	}
-	return files
+	return files, diffs, nil
 }
 
-// statusOf decides whether a change is skipped, kept or judged, and why when it isn't judged.
-func statusOf(c gitdiff.Change, rules skip.Rules, keeps []config.Keep) (status, reason string) {
-	if why := skipReason(c, rules); why != "" {
-		return StatusSkipped, why
+// unreadReason says why a change is skipped on the strength of the listing alone, or returns ""
+// when its diff has to be read. The path is looked at first because it is the reason a person can
+// do something about.
+func unreadReason(c gitdiff.Change, rules skip.Rules) string {
+	if why := rules.Reason(c.Path); why != "" {
+		return why
 	}
+	if c.Marked {
+		return "marked generated or vendored"
+	}
+	return ""
+}
+
+// statusOf decides whether a change whose diff has been read is skipped, kept or judged, and why
+// when it isn't judged.
+func statusOf(path string, d gitdiff.Diff, keeps []config.Keep) (status, reason string) {
+	switch {
+	case d.Binary:
+		return StatusSkipped, "binary"
+	case d.NoContent:
+		return StatusSkipped, "no content change"
+	}
+	hash := changeHash(d.Text)
 	for _, k := range keeps {
-		if binds(k, c) {
+		if k.Path == path && k.Change == hash {
 			return StatusKept, k.Reason
 		}
 	}
 	return StatusJudged, ""
-}
-
-// skipReason says why a change is not worth a request, or returns "" when it is. The path is
-// looked at first because it is the reason a person can do something about.
-func skipReason(c gitdiff.Change, rules skip.Rules) string {
-	switch why := rules.Reason(c.Path); {
-	case why != "":
-		return why
-	case c.Binary:
-		return "binary"
-	case c.Marked:
-		return "marked generated or vendored"
-	case c.Diff == "":
-		// A change of mode alone has no lines, and so nothing to judge.
-		return "no content change"
-	}
-	return ""
 }
 
 // anyJudged reports whether any file is bound for Jev. A run with none needs no client, no cache
@@ -129,20 +146,21 @@ func anyJudged(files []File) bool {
 	return slices.ContainsFunc(files, func(f File) bool { return f.Status == StatusJudged })
 }
 
-// all judges the files marked for it, each against the change at the same index, and then finds
-// where to look in the ones that failed. The second pass waits for the first because a worker that
-// stopped to wait for its file's hunks could leave no worker free to ask about them.
-func (j *judge) all(ctx context.Context, files []File, changes []gitdiff.Change) error {
+// all judges the files marked for it, each on the diff at the same index, and then finds where to
+// look in the ones that failed. The second pass waits for the first because a worker that stopped
+// to wait for its file's hunks could leave no worker free to ask about them.
+func (j *judge) all(ctx context.Context, files []File, diffs []string) error {
 	err := j.each(ctx, len(files), func(ctx context.Context, i int) error {
 		if files[i].Status != StatusJudged {
 			return nil
 		}
-		return j.file(ctx, &files[i], changes[i])
+		return j.file(ctx, &files[i], diffs[i])
 	})
 	if err != nil {
 		return err
 	}
-	return j.where(ctx, files, changes)
+	j.where(ctx, files, diffs)
+	return nil
 }
 
 // each calls do for every index below n, jobs at a time, and returns the first error. That error

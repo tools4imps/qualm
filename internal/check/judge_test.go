@@ -302,9 +302,10 @@ func TestRunReplaysACachedAnswerWithoutARequest(t *testing.T) {
 	if want := (Usage{Requests: 1, InputTokens: 100, Cost: 0.001}); first.Usage != want {
 		t.Errorf("the first run's usage = %+v, want %+v", first.Usage, want)
 	}
-	sum := sha256.Sum256([]byte(f.received()[0].Body))
+	request := sha256.Sum256([]byte(f.received()[0].Body))
+	sum := sha256.Sum256([]byte(hex.EncodeToString(request[:]) + "\n\"push_back\" 0.6"))
 	if got := entries(t, o.CacheDir); len(got) != 1 || got[hex.EncodeToString(sum[:])+".json"] == "" {
-		t.Errorf("the cache holds %d entries, want one named by the SHA-256 of the request", len(got))
+		t.Errorf("the cache holds %v, want one entry named by the SHA-256 of the request's key and the gate's threshold", got)
 	}
 
 	// Jev would now say something else, so only a replay can give the first answer again.
@@ -319,6 +320,91 @@ func TestRunReplaysACachedAnswerWithoutARequest(t *testing.T) {
 	}
 	if second.Usage != (Usage{}) {
 		t.Errorf("the replay's usage = %+v, want nothing spent", second.Usage)
+	}
+	if first.Warnings != nil || second.Warnings != nil {
+		t.Errorf("warnings = %q and %q, want none", first.Warnings, second.Warnings)
+	}
+}
+
+// Contract: judge/U3
+func TestRunAsksAgainWhenTheAnswerWasSettledAgainstAnotherThreshold(t *testing.T) {
+	t.Parallel()
+	r := oneChange(t)
+	f := newFake(t, inTurn(
+		map[string]float64{"push_back": 0.68},
+		map[string]float64{"push_back": 0.71},
+		map[string]float64{"push_back": 0.72},
+	))
+	o := r.options(f)
+
+	// At 0.6 the first answer is no close call, so it is cached as it came.
+	first := mustRun(t, o)
+	if got := file(t, first, "a.go"); got.Answers["push_back"].Value != 0.68 || f.count() != 1 {
+		t.Fatalf("push_back = %v after %d requests, want 0.68 after 1", got.Answers["push_back"].Value, f.count())
+	}
+
+	// At 0.7 it would have been one, so the cached answer is not the one a cold cache gives.
+	o.Threshold = 0.7
+	second := mustRun(t, o)
+
+	got := file(t, second, "a.go")
+	if f.count() != 4 || got.Answers["push_back"].Value != 0.72 || !reflect.DeepEqual(got.Failed, []string{"push_back"}) {
+		t.Errorf("at 0.7 push_back = %v, failing %v, after %d requests: want the median 0.72 and a fail after 3 more",
+			got.Answers["push_back"].Value, got.Failed, f.count()-1)
+	}
+
+	// Each threshold keeps its own settled answer.
+	for threshold, want := range map[float64]float64{0: 0.68, 0.6: 0.68, 0.7: 0.72} {
+		o.Threshold = threshold
+		if got := file(t, mustRun(t, o), "a.go").Answers["push_back"].Value; got != want || f.count() != 4 {
+			t.Errorf("at %v push_back = %v after %d requests, want %v replayed", threshold, got, f.count(), want)
+		}
+	}
+}
+
+// Contract: judge/U3
+func TestRunAsksAgainWhenACachedEntryDoesNotAnswerEveryQuestion(t *testing.T) {
+	t.Parallel()
+	cases := map[string]func(answers map[string]any){
+		"no answers at all": func(answers map[string]any) { clear(answers) },
+		"one answer gone":   func(answers map[string]any) { delete(answers, "added_copies") },
+		"a value over 1":    func(answers map[string]any) { answers["push_back"] = map[string]any{"value": 1.5} },
+		"a value under 0":   func(answers map[string]any) { answers["simplified"] = map[string]any{"value": -0.1} },
+	}
+	r := oneChange(t) // shared: each case has its own fake Jev and its own cache
+	for name, damage := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newFake(t, says(map[string]float64{"push_back": 0.9}))
+			o := r.options(f)
+			first := mustRun(t, o)
+			sound := entries(t, o.CacheDir)
+			for name, data := range sound {
+				var entry map[string]any
+				if err := json.Unmarshal([]byte(data), &entry); err != nil {
+					t.Fatal(err)
+				}
+				damage(entry["answers"].(map[string]any))
+				damaged, err := json.Marshal(entry)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(o.CacheDir, name), damaged, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			second := mustRun(t, o)
+
+			if f.count() != 2 || len(sound) != 1 {
+				t.Errorf("made %d requests with %d cache entries, want the one entry asked for again", f.count(), len(sound))
+			}
+			if !reflect.DeepEqual(second.Files, first.Files) {
+				t.Errorf("push_back = %v failing %v, want the fresh answer the first run got", second.Files[0].Answers["push_back"].Value, second.Files[0].Failed)
+			}
+			if got := entries(t, o.CacheDir); !reflect.DeepEqual(got, sound) {
+				t.Errorf("the cache holds %v, want the damaged entry replaced by the fresh answer", got)
+			}
+		})
 	}
 }
 
@@ -343,6 +429,9 @@ func TestRunWithTheCacheOffReadsNothingAndWritesNothing(t *testing.T) {
 	}
 	if got := entries(t, o.CacheDir); !reflect.DeepEqual(got, warm) {
 		t.Error("the cache changed during a run with the cache off")
+	}
+	if res.Warnings != nil {
+		t.Errorf("warnings = %q, want none: a cache that is off isn't one that failed", res.Warnings)
 	}
 
 	o.CacheDir = filepath.Join(t.TempDir(), "unused")
@@ -405,9 +494,10 @@ func TestRunStopsWhenThereIsNoUserCacheDirectoryUnlessTheCacheIsOff(t *testing.T
 }
 
 // Contract: judge/U3
-func TestRunCarriesOnWhenTheCacheCannotBeWritten(t *testing.T) {
+// Contract: gate/G12
+func TestRunCarriesOnAndWarnsOnceWhenTheCacheCannotBeWritten(t *testing.T) {
 	t.Parallel()
-	r := oneChange(t)
+	r, _ := manyChanges(t, 3)
 	f := newFake(t, says(map[string]float64{"push_back": 0.3}))
 	o := r.options(f)
 	// A file where the directory should be makes every write fail.
@@ -418,8 +508,12 @@ func TestRunCarriesOnWhenTheCacheCannotBeWritten(t *testing.T) {
 
 	res := mustRun(t, o)
 
-	if got := file(t, res, "a.go").Answers["push_back"].Value; got != 0.3 || f.count() != 1 {
-		t.Errorf("push_back = %v after %d requests, want 0.3 after 1", got, f.count())
+	if got := file(t, res, "a.go").Answers["push_back"].Value; got != 0.3 || f.count() != 3 || !res.Passed() {
+		t.Errorf("push_back = %v after %d requests, passed %v: want 0.3 after 3 and a pass", got, f.count(), res.Passed())
+	}
+	want := []string{"the cache at " + o.CacheDir + " couldn't be written, so answers won't be reused"}
+	if !reflect.DeepEqual(res.Warnings, want) {
+		t.Errorf("warnings = %q, want one for the three failed writes: %q", res.Warnings, want)
 	}
 }
 

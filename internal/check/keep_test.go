@@ -1,6 +1,8 @@
 package check
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"reflect"
 	"strings"
@@ -77,9 +79,9 @@ func TestKeepReplacesAnEarlierKeepDropsStaleOnesAndLeavesTheRestOfTheConfig(t *t
 		r.write(name, edited(5, 3))
 	}
 	live := r.keepOf("z.go", "kept z")
-	earlier := config.Keep{Path: "b.go", Change: changeHash("b.go as it was"), Reason: "kept b before", Date: "2026-01-01"}
+	earlier := config.Keep{Path: "b.go", Change: "0b", Reason: "kept b before", Date: "2026-01-01"}
 	current := r.keepOf("a.go", "kept a before")
-	gone := config.Keep{Path: "gone.go", Change: changeHash("gone"), Reason: "kept gone", Date: "2026-01-01"}
+	gone := config.Keep{Path: "gone.go", Change: "0d", Reason: "kept gone", Date: "2026-01-01"}
 	before := config.Config{Model: "typesafe/jev-2", Skip: []string{"db/*"}, Keeps: []config.Keep{live, earlier, gone, current}}
 	if err := before.Save(r.dir); err != nil {
 		t.Fatal(err)
@@ -190,14 +192,38 @@ func TestKeepRefusesAndWritesNothing(t *testing.T) {
 }
 
 // Contract: gate/G4
-func TestChangeHashIsTheSHA256OfTheDiffInLowercaseHex(t *testing.T) {
+func TestChangeHashCoversTheLinesAddedAndRemovedAndNothingElse(t *testing.T) {
 	t.Parallel()
-	for diff, want := range map[string]string{
-		"":    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-		"abc": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
-	} {
-		if got := changeHash(diff); got != want {
-			t.Errorf("changeHash(%q) = %s, want %s", diff, got, want)
+	const diff = "--- a/x.sql\n+++ b/x.sql\n@@ -3,4 +3,4 @@ create\n one\n-two\n+2\n three\n@@ -40,2 +40,3 @@\n forty\n+more\n"
+	sum := sha256.Sum256([]byte("-two\n+2\n+more\n"))
+	want := hex.EncodeToString(sum[:])
+	if got := changeHash(diff); got != want {
+		t.Errorf("changeHash = %s, want %s, the SHA-256 of the three changed lines in lowercase hex", got, want)
+	}
+	same := map[string]string{
+		"other line numbers":    strings.NewReplacer("-3,4 +3,4", "-9,4 +9,4", "-40,2 +40,3", "-46,2 +46,3").Replace(diff),
+		"other lines around it": strings.NewReplacer(" one\n", " uno\n", " forty\n", " 40\n", " create\n", " insert\n").Replace(diff),
+		"another name":          strings.ReplaceAll(diff, "x.sql", "y.sql"),
+		"a note from git":       diff + "\\ No newline at end of file\n",
+	}
+	for name, other := range same {
+		if changeHash(other) != want {
+			t.Errorf("%s changed the hash, want it left out", name)
+		}
+	}
+	differs := map[string]string{
+		"a changed line edited":          strings.Replace(diff, "+2\n", "+two!\n", 1),
+		"a changed line dropped":         strings.Replace(diff, "+more\n", "", 1),
+		"the changed lines reordered":    strings.Replace(diff, "-two\n+2\n", "+2\n-two\n", 1),
+		"a removed line that starts --":  strings.Replace(diff, "-two\n", "-two\n--- a comment in SQL\n", 1),
+		"an added line that starts ++":   strings.Replace(diff, "+2\n", "+2\n+++ b\n", 1),
+		"a line added to the last hunk":  diff + "+and more\n",
+		"a line added with no line end":  diff + "+and more",
+		"an added line become a removal": strings.Replace(diff, "+more\n", "-more\n", 1),
+	}
+	for name, other := range differs {
+		if changeHash(other) == want {
+			t.Errorf("%s left the hash the same", name)
 		}
 	}
 }

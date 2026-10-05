@@ -28,7 +28,7 @@ type Gate struct {
 // Keep records that a person accepted one exact change to one file.
 type Keep struct {
 	Path   string `json:"path"`
-	Change string `json:"change"` // the SHA-256 of the file's normalised diff, in hex
+	Change string `json:"change"` // the SHA-256 of the lines the change adds and removes, in hex
 	Reason string `json:"reason"`
 	Date   string `json:"date"` // YYYY-MM-DD
 }

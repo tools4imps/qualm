@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,48 +24,94 @@ func Text(w io.Writer, r check.Result) {
 			failing = append(failing, f)
 		}
 	}
+	fmt.Fprintln(w, headline(r.DryRun, len(judged), len(failing)))
+	writeSkipped(w, filter(r.Files, check.StatusSkipped))
 	switch {
 	case len(judged) == 0:
-		fmt.Fprintln(w, "qualm: nothing to judge.")
 	case r.DryRun:
 		// A dry run sends nothing, so there is no verdict to report and no keeps to show.
 		writeDryRun(w, judged)
 		return
-	case len(failing) == 0:
-		fmt.Fprintf(w, "qualm: %s, no qualms.\n", changed(len(judged)))
-	default:
-		writeFail(w, r, failing, len(judged))
+	case len(failing) > 0:
+		writeFail(w, r.Questions, failing)
 	}
 	writeKeeps(w, r)
+	writeWarnings(w, r.Warnings)
 }
 
-func writeFail(w io.Writer, r check.Result, failing []check.File, judged int) {
-	fmt.Fprintf(w, "qualm: %d of %s drew a qualm.\n", len(failing), changed(judged))
+// headline is the report's first line: what the run found, or that it had nothing to look at.
+func headline(dryRun bool, judged, failing int) string {
+	switch {
+	case judged == 0:
+		return "qualm: nothing to judge."
+	case dryRun:
+		return "qualm: dry run, nothing sent."
+	case failing == 0:
+		return fmt.Sprintf("qualm: %s, no qualms.", count(judged, "changed file"))
+	}
+	return fmt.Sprintf("qualm: %d of %s drew a qualm.", failing, count(judged, "changed file"))
+}
+
+// writeSkipped counts the skipped files by reason, the reason that skipped most first. Without
+// it a rule that skips every file reads the same as a change with nothing in it.
+func writeSkipped(w io.Writer, skipped []check.File) {
+	if len(skipped) == 0 {
+		return
+	}
+	counts := map[string]int{}
+	for _, f := range skipped {
+		counts[f.Reason]++
+	}
+	reasons := slices.SortedFunc(maps.Keys(counts), func(a, b string) int {
+		return cmp.Or(cmp.Compare(counts[b], counts[a]), cmp.Compare(a, b))
+	})
+	for i, why := range reasons {
+		reasons[i] = fmt.Sprintf("%d %s", counts[why], shown(why))
+	}
+	fmt.Fprintf(w, "Skipped %s: %s.\n", count(len(skipped), "file"), strings.Join(reasons, ", "))
+}
+
+func writeFail(w io.Writer, qs []questions.Question, failing []check.File) {
 	width := 0
 	for _, f := range failing {
-		width = max(width, len(f.Path))
+		width = max(width, len(shown(f.Path)))
 	}
 	for _, f := range failing {
 		fmt.Fprintln(w)
-		writeBlock(w, r.Questions, f, width)
+		writeBlock(w, qs, f, width)
 	}
-	writeAdvice(w, r.Questions, failing)
+	writeAdvice(w, qs, failing)
 }
 
-// writeBlock prints one failing file: the gate values, the direction and the diagnoses.
+// writeBlock prints one failing file: the gate values, what the choices say and the diagnoses.
 func writeBlock(w io.Writer, qs []questions.Question, f check.File, width int) {
 	var gated []string
 	for _, id := range f.Failed {
 		gated = append(gated, fmt.Sprintf("%s %.2f", spaced(id), f.Answers[id].Value))
 	}
-	fmt.Fprintf(w, "%-*s  %s\n", width, f.Path, strings.Join(gated, ", "))
+	fmt.Fprintf(w, "%-*s  %s\n", width, shown(f.Path), strings.Join(gated, ", "))
 	for _, q := range qs {
-		// Only the answer to a choice question holds a choice.
-		if a := f.Answers[q.ID]; a.Choice != "" && a.Choice != "same" {
-			fmt.Fprintf(w, "  %s %.2f\n", a.Choice, a.Value)
+		if line := choice(q, f.Answers[q.ID]); line != "" {
+			fmt.Fprintln(w, "  "+line)
 		}
 	}
 	writeDiagnoses(w, qs, f)
+}
+
+// choice is how the answer to a choice question reads in a file's block, and "" when there is
+// nothing to say. A question that describes the change, as the built-in direction does, is known
+// by its options and says nothing of a change that is the same. Any other is named, since its
+// option alone could mean anything.
+func choice(q questions.Question, a jev.Answer) string {
+	switch {
+	case a.Choice == "": // only the answer to a choice question holds a choice
+		return ""
+	case q.Role != questions.RoleDescribes:
+		return fmt.Sprintf("%s %s %.2f", spaced(q.ID), a.Choice, a.Value)
+	case a.Choice == "same":
+		return ""
+	}
+	return fmt.Sprintf("%s %.2f", a.Choice, a.Value)
 }
 
 // writeDiagnoses prints the diagnoses that fired on the file, strongest first. The sort is stable
@@ -107,7 +154,7 @@ func writeAdvice(w io.Writer, qs []questions.Question, failing []check.File) {
 	var paths []string
 	fired := map[string]bool{}
 	for _, f := range failing {
-		paths = append(paths, f.Path)
+		paths = append(paths, shellWord(f.Path))
 		for _, q := range f.Fired(qs) {
 			fired[q.ID] = true
 		}
@@ -127,13 +174,42 @@ func writeAdvice(w io.Writer, qs []questions.Question, failing []check.File) {
 	fmt.Fprintf(w, "    qualm keep %s --reason \"...\"\n", strings.Join(paths, " "))
 }
 
+// shown is a path or a reason as the report prints it. Both come from the repository, where
+// anyone can name a file or write a keep. One that holds a line break or any other character a
+// terminal doesn't print as itself is quoted with that character escaped, so it can't pass for a
+// line of the report.
+func shown(s string) string {
+	if strings.ContainsFunc(s, func(r rune) bool { return !strconv.IsPrint(r) }) {
+		return strconv.Quote(s)
+	}
+	return s
+}
+
+// shellWord is a path as a shell reads it back, for a command the reader is told to run. A path
+// of nothing but plain characters stands as it is and any other goes in single quotes, where a
+// shell reads nothing but the closing quote. One that shown would escape goes in $'...', the
+// quoting that understands those escapes, to stay on one line.
+func shellWord(path string) string {
+	plain := func(r rune) bool {
+		return 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || strings.ContainsRune("_./-", r)
+	}
+	switch quoted := shown(path); {
+	case quoted != path:
+		return "$'" + strings.ReplaceAll(quoted[1:len(quoted)-1], "'", `\'`) + "'"
+	case strings.ContainsFunc(path, func(r rune) bool { return !plain(r) }):
+		return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
+	}
+	return path
+}
+
 func spaced(id string) string { return strings.ReplaceAll(id, "_", " ") }
 
-func changed(n int) string {
+// count is a number of things with the noun in the singular or the plural.
+func count(n int, noun string) string {
 	if n == 1 {
-		return "1 changed file"
+		return "1 " + noun
 	}
-	return fmt.Sprintf("%d changed files", n)
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 func filter(files []check.File, status string) []check.File {
@@ -151,14 +227,26 @@ func writeKeeps(w io.Writer, r check.Result) {
 	if kept := filter(r.Files, check.StatusKept); len(kept) > 0 {
 		fmt.Fprintln(w, "\nKept")
 		for _, f := range kept {
-			fmt.Fprintf(w, "  %s: %s\n", f.Path, f.Reason)
+			fmt.Fprintf(w, "  %s: %s\n", shown(f.Path), shown(f.Reason))
 		}
 	}
 	if len(r.StaleKeeps) > 0 {
 		fmt.Fprintln(w, "\nStale keeps (qualm keep clears them)")
 		for _, k := range r.StaleKeeps {
-			fmt.Fprintf(w, "  %s: %s\n", k.Path, k.Reason)
+			fmt.Fprintf(w, "  %s: %s\n", shown(k.Path), shown(k.Reason))
 		}
+	}
+}
+
+// writeWarnings ends the report with what went wrong without changing the verdict.
+func writeWarnings(w io.Writer, warnings []string) {
+	if len(warnings) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "\nWarnings")
+	for _, warning := range warnings {
+		// A warning can quote a path, such as the cache directory's.
+		fmt.Fprintf(w, "  %s\n", shown(warning))
 	}
 }
 
@@ -169,20 +257,15 @@ const questionTokens = 1000
 func writeDryRun(w io.Writer, judged []check.File) {
 	pathWidth, byteWidth := 0, 0
 	for _, f := range judged {
-		pathWidth = max(pathWidth, len(f.Path))
+		pathWidth = max(pathWidth, len(shown(f.Path)))
 		byteWidth = max(byteWidth, len(strconv.Itoa(f.Bytes)))
 	}
-	fmt.Fprintln(w, "qualm: dry run, nothing sent.")
 	fmt.Fprintln(w)
 	total := 0
 	for _, f := range judged {
-		tokens := f.Bytes/3 + questionTokens
+		tokens := jev.TokensIn(f.Bytes) + questionTokens
 		total += tokens
-		fmt.Fprintf(w, "  %-*s   %*d bytes   about %d tokens\n", pathWidth, f.Path, byteWidth, f.Bytes, tokens)
+		fmt.Fprintf(w, "  %-*s   %*d bytes   about %d tokens\n", pathWidth, shown(f.Path), byteWidth, f.Bytes, tokens)
 	}
-	noun := "files"
-	if len(judged) == 1 {
-		noun = "file"
-	}
-	fmt.Fprintf(w, "\n%d %s, about %d tokens, about $%.4f.\n", len(judged), noun, total, jev.CostOf(total))
+	fmt.Fprintf(w, "\n%s, about %d tokens, about $%.4f.\n", count(len(judged), "file"), total, jev.CostOf(total))
 }

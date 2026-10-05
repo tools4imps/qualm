@@ -1,6 +1,7 @@
 package questions
 
 import (
+	"cmp"
 	"encoding/json"
 	"reflect"
 	"strings"
@@ -178,6 +179,23 @@ func TestGateQuestionAndThresholdCanChange(t *testing.T) {
 		t.Fatalf("gating = %v", got)
 	}
 
+	// A question named as the gate keeps the threshold it was written with, and the gate setting's
+	// own threshold wins when there is one.
+	for _, own := range []Question{
+		{ID: "mine", Type: "noul", Instructions: "?", Threshold: 0.9},
+		{ID: "mine", Type: "noul", Instructions: "?", Gates: true, Threshold: 0.9},
+		{ID: "simplified", Type: "noul", Instructions: "?", Threshold: 0.9},
+	} {
+		qs = mustResolve(t, own.ID, 0, nil, []Question{own})
+		if g := find(t, qs, own.ID); !g.Gates || g.Role != "gate" || g.Threshold != 0.9 {
+			t.Fatalf("%s named as the gate = %+v, want it gating at its own 0.9", own.ID, g)
+		}
+		qs = mustResolve(t, own.ID, 0.3, nil, []Question{own})
+		if g := find(t, qs, own.ID); !g.Gates || g.Threshold != 0.3 {
+			t.Fatalf("%s named as the gate at 0.3 = %+v, want the gate setting's 0.3", own.ID, g)
+		}
+	}
+
 	// The gate may sit first in the list once the questions before it are dropped.
 	qs = mustResolve(t, "simplified", 0, []string{"push_back", "direction"}, nil)
 	if got := gates(qs); !reflect.DeepEqual(got, []string{"simplified"}) || qs[0].ID != "simplified" {
@@ -213,6 +231,8 @@ func TestEveryQuestionIsValidated(t *testing.T) {
 		{"gating choice", Question{ID: "q", Type: "choice", Instructions: "?", Criteria: arr(`{"a":"x","b":"y"}`), Gates: true, Threshold: 0.5}, "q"},
 		{"gate with no threshold", Question{ID: "q", Type: "noul", Instructions: "?", Gates: true}, "q"},
 		{"gate above one", Question{ID: "q", Type: "noul", Instructions: "?", Gates: true, Threshold: 1.1}, "q"},
+		{"unknown role", Question{ID: "q", Type: "noul", Instructions: "?", Role: "diagnostic"}, `unknown role "diagnostic"`},
+		{"role in capitals", Question{ID: "q", Type: "noul", Instructions: "?", Role: "Gate"}, `"q"`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -224,8 +244,17 @@ func TestEveryQuestionIsValidated(t *testing.T) {
 		{ID: "s2", Type: "score", Instructions: "?", Criteria: arr(`["a","b"]`)},
 		{ID: "s10", Type: "score", Instructions: "?", Criteria: arr(`["1","2","3","4","5","6","7","8","9","10"]`), Gates: true, Threshold: 1},
 		{ID: "c2", Type: "choice", Instructions: "?", Criteria: arr(`{"a":"x","b":"y"}`)},
+		{ID: "r1", Type: "noul", Instructions: "?", Role: "gate"},
+		{ID: "r2", Type: "noul", Instructions: "?", Role: "describes"},
+		{ID: "r3", Type: "noul", Instructions: "?", Role: "diagnosis"},
+		{ID: "r4", Type: "noul", Instructions: "?"},
 	}
-	mustResolve(t, "", 0, nil, ok)
+	// The four with roles: each keeps the one it was written with, and none makes a diagnosis.
+	for _, q := range mustResolve(t, "", 0, nil, ok)[13:] {
+		if want := cmp.Or(find(t, ok, q.ID).Role, "diagnosis"); q.Role != want {
+			t.Errorf("%s has role %q, want %q", q.ID, q.Role, want)
+		}
+	}
 
 	mustFail(t, "dup", "", 0, nil, []Question{
 		{ID: "dup", Type: "noul", Instructions: "1?"},

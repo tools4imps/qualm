@@ -220,3 +220,22 @@ Each package has one job and talks to the others through plain values. `internal
 A public repository at `github.com/tools4imps/qualm`, MIT licence. CI runs the tests, the Contract check and `go vet` on every push and pull request. A tag builds binaries for macOS, Linux and Windows with GoReleaser and attaches them to a GitHub release. `go install github.com/tools4imps/qualm/cmd/qualm@latest` works from the first tag.
 
 qualm sends diffs to OpenRouter and on to TypeSafe. The README says so plainly.
+
+## Changes after the independent review
+
+A reviewer who hadn't seen the code said not to ship, and these are the fixes. Where this section and the text above disagree, this section and the Contract are right.
+
+- **Git's output is pinned.** Every diff call passes fixed options for colour, external diff tools, text conversion, the algorithm, the prefixes and the context, and empties `GIT_DIFF_OPTS`. A user's settings used to be able to make every file read as having no content, and the run exited 0.
+- **An unreadable diff is an error.** Only a mode-only change, a pure rename or a new empty file has no content to judge.
+- **File names are never read as patterns.** Every git call passes `--literal-pathspecs`.
+- **Git's header lines are dropped wherever they appear** in a diff, which matters when a file changes type.
+- **Listing reads no diff.** Names come first, the skip rules and git attributes are applied, and a diff is read only for a file that isn't skipped.
+- **Path arguments narrow the list after renames are paired.** One that exists neither in the working tree nor in the base is an error.
+- **A keep binds to the lines the change adds and removes**, and no longer to line numbers or context. A change elsewhere in the file on the base branch leaves it standing.
+- **The cache key also covers the gate thresholds**, and a cached entry is used only when it answers every question asked.
+- **The text report counts skipped files by reason** on its second line, escapes control characters in paths and reasons, and quotes paths in the suggested `qualm keep` command.
+- **Warnings.** An error while finding where the diagnoses point no longer discards the verdict. It is reported as a warning, and so is a cache that can't be written.
+- **A hunk over the piece limit is asked in pieces** in the where pass too.
+- **Questions.** A question named as the gate keeps its own threshold unless the gate setting gives one. A role must be one of the three or left out. A choice question is never a diagnosis, and its answer prints with its name unless it describes the change.
+- **The command line.** A number that isn't finite is refused. With `keep`, only `--base` and `--reason` apply.
+- **Money.** A reply with no usage is priced from the size of the request, and a timeout says it timed out.

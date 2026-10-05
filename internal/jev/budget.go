@@ -23,7 +23,7 @@ func (b *Budget) Allow() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.cost >= b.limit {
-		return fmt.Errorf("budget reached: spent $%.4f of $%.2f", b.cost, b.limit)
+		return fmt.Errorf("budget reached: spent $%.4f of $%.4f", b.cost, b.limit)
 	}
 	return nil
 }

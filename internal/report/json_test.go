@@ -22,6 +22,7 @@ func renderJSON(t *testing.T, r check.Result) string {
 }
 
 // Contract: report/R6
+// Contract: report/R11
 func TestJSONEveryField(t *testing.T) {
 	r := check.Result{
 		Base: "abc123<&>",
@@ -40,6 +41,7 @@ func TestJSONEveryField(t *testing.T) {
 		},
 		StaleKeeps: []config.Keep{{Path: "lib/old.rb", Change: "deadbeef", Reason: "r", Date: "2026-10-04"}},
 		Usage:      check.Usage{Requests: 3, InputTokens: 4200, Cost: 0.00018},
+		Warnings:   []string{"couldn't find where the diagnoses point: budget reached", "the cache couldn't be written"},
 	}
 	out := renderJSON(t, r)
 	if !strings.HasSuffix(out, "}\n") || !strings.Contains(out, "\n  \"passed\": false,\n") {
@@ -63,7 +65,8 @@ func TestJSONEveryField(t *testing.T) {
 	    {"path": "docs/x.md", "status": "skipped", "reason": "prose or data"}
 	  ],
 	  "stale_keeps": [{"path": "lib/old.rb", "change": "deadbeef", "reason": "r", "date": "2026-10-04"}],
-	  "usage": {"requests": 3, "input_tokens": 4200, "cost": 0.00018}
+	  "usage": {"requests": 3, "input_tokens": 4200, "cost": 0.00018},
+	  "warnings": ["couldn't find where the diagnoses point: budget reached", "the cache couldn't be written"]
 	}`), &want); err != nil {
 		t.Fatal(err)
 	}
@@ -91,10 +94,11 @@ func TestJSONEmptyResult(t *testing.T) {
 }
 
 // Contract: report/R6
+// Contract: report/R11
 func TestJSONLeavesOutEmptyFields(t *testing.T) {
 	r := check.Result{Files: []check.File{{Path: "a.rb", Status: "judged"}}, DryRun: true}
 	out := renderJSON(t, r)
-	for _, key := range []string{"reason", "bytes", "answers", "failed", "where"} {
+	for _, key := range []string{"reason", "bytes", "answers", "failed", "where", "warnings"} {
 		if strings.Contains(out, `"`+key+`"`) {
 			t.Errorf("%q should be left out:\n%s", key, out)
 		}

@@ -112,7 +112,11 @@ func (r *repo) diff(path string) string {
 	}
 	for _, c := range changes {
 		if c.Path == path {
-			return c.Diff
+			d, err := gitdiff.Read(r.dir, base, c)
+			if err != nil {
+				r.t.Fatal(err)
+			}
+			return d.Text
 		}
 	}
 	r.t.Fatalf("%s is not a change against main", path)
@@ -357,4 +361,42 @@ func likeliest(probs map[string]float64) string {
 		}
 	}
 	return best
+}
+
+// wrapGit puts a script named git first on the path. The script finds the real git in $REAL_GIT.
+// A test that uses it can't run in parallel with the others.
+func wrapGit(t *testing.T, script string) {
+	t.Helper()
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte("#!/bin/sh\n"+script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("REAL_GIT", real)
+}
+
+// spyGit makes every call to git note its arguments before it runs. It returns a function that
+// lists the calls that read a file's diff, which are the diff calls that don't ask for names alone.
+func spyGit(t *testing.T) func() []string {
+	t.Helper()
+	log := filepath.Join(t.TempDir(), "calls")
+	t.Setenv("SPY_LOG", log)
+	wrapGit(t, `printf '%s\n' "$*" >> "$SPY_LOG"; exec "$REAL_GIT" "$@"`)
+	return func() []string {
+		data, err := os.ReadFile(log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var reads []string
+		for _, call := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if strings.Contains(call, " diff ") && !strings.Contains(call, "--name-status") {
+				reads = append(reads, call)
+			}
+		}
+		return reads
+	}
 }

@@ -42,11 +42,12 @@ type File struct {
 const firedAt = 0.5
 
 // Fired lists the diagnoses among qs that the file answered at firedAt or above, in question
-// order. They are what a report shows under a failing file and what the file is searched for.
+// order. They are what a report shows under a failing file and what the file is searched for. A
+// choice is never one of them: its value is how sure Jev is of an option, not how bad the change is.
 func (f File) Fired(qs []questions.Question) []questions.Question {
 	var fired []questions.Question
 	for _, q := range qs {
-		if q.Role == questions.RoleDiagnosis && f.Answers[q.ID].Value >= firedAt {
+		if q.Role == questions.RoleDiagnosis && q.Type != questions.TypeChoice && f.Answers[q.ID].Value >= firedAt {
 			fired = append(fired, q)
 		}
 	}
@@ -68,6 +69,7 @@ type Result struct {
 	Files      []File               `json:"files"`   // sorted by path
 	StaleKeeps []config.Keep        `json:"stale_keeps"`
 	Usage      Usage                `json:"usage"`
+	Warnings   []string             `json:"warnings,omitempty"` // what went wrong without changing the verdict
 }
 
 // Passed reports whether no judged file reached a gate.

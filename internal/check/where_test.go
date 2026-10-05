@@ -1,6 +1,7 @@
 package check
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -149,6 +150,126 @@ func TestRunLooksForNothingWhenNoDiagnosisFiredOrTheFilePassed(t *testing.T) {
 			}
 			if f.count() != 1 {
 				t.Errorf("made %d requests, want 1", f.count())
+			}
+		})
+	}
+}
+
+// Contract: judge/U6
+func TestRunAsksAHunkOverThePieceLimitInPieces(t *testing.T) {
+	t.Parallel()
+	// One small hunk near the top, and 700 long lines added at the bottom in a hunk of some 70,000
+	// bytes.
+	var added strings.Builder
+	for i := 1; i <= 700; i++ {
+		fmt.Fprintf(&added, "added %04d %s\n", i, strings.Repeat("x", 90))
+	}
+	r := newRepo(t, map[string]string{"a.go": numbered(100)})
+	r.write("a.go", edited(100, 10)+added.String())
+	// The diagnosis is strongest in the last lines of the big hunk, which only its second piece
+	// holds, and the small hunk beats the first piece.
+	f := newFake(t, func(c call) answer {
+		switch {
+		case whole(c):
+			return answer{values: map[string]float64{"push_back": 0.9, "added_copies": 0.9}}
+		case strings.Contains(c.change(), "added 0700"):
+			return answer{values: map[string]float64{"added_copies": 0.8}}
+		case strings.Contains(c.change(), "changed 10"):
+			return answer{values: map[string]float64{"added_copies": 0.3}}
+		}
+		return answer{values: map[string]float64{"added_copies": 0.1}}
+	})
+
+	res := mustRun(t, r.options(f))
+
+	_, hunks := gitdiff.Hunks(r.diff("a.go"))
+	if len(hunks) != 2 || len(hunks[1].Text) <= 60000 {
+		t.Fatalf("the diff has %d hunks, want 2 with the second over the limit", len(hunks))
+	}
+	want := map[string][2]int{"added_copies": {hunks[1].Start, hunks[1].End}}
+	if got := file(t, res, "a.go").Where; !reflect.DeepEqual(got, want) {
+		t.Errorf("where = %v, want the big hunk: %v", got, want)
+	}
+	hunkRequests := 0
+	for _, c := range f.received() {
+		if len(c.change()) > 60000 {
+			t.Errorf("a request carried %d bytes of diff, want at most 60000", len(c.change()))
+		}
+		if !whole(c) {
+			hunkRequests++
+		}
+	}
+	if hunkRequests != 3 {
+		t.Errorf("made %d requests for the hunks, want 1 for the small one and 2 for the big one's pieces", hunkRequests)
+	}
+}
+
+// Contract: judge/U6
+func TestRunNeverLooksForWhereAChoicePoints(t *testing.T) {
+	t.Parallel()
+	r := threeHunks(t)
+	r.write("qualm.json", `{"questions": [{"id": "mood", "type": "choice", "instructions": "What mood?",
+		"criteria": {"grim": "It is grim.", "sunny": "It is sunny."}}]}`)
+	f := newFake(t, func(c call) answer {
+		return answer{
+			values:  map[string]float64{"push_back": 0.9},
+			choices: map[string]map[string]float64{"mood": {"grim": 0.9, "sunny": 0.1}},
+		}
+	})
+
+	res := mustRun(t, r.options(f))
+
+	got := file(t, res, "a.go")
+	if got.Answers["mood"].Choice != "grim" || len(got.Failed) != 1 {
+		t.Fatalf("a.go = %+v, want it failing with a grim mood", got)
+	}
+	if f.count() != 1 || len(got.Where) != 0 || len(got.Fired(res.Questions)) != 0 {
+		t.Errorf("made %d requests, where %v, fired %v: want a choice at 0.9 to count as no diagnosis", f.count(), got.Where, ids(got.Fired(res.Questions)))
+	}
+}
+
+// Contract: gate/G12
+func TestRunKeepsItsVerdictWhenFindingWhereFails(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		budget float64
+		reply  func(call) answer
+		want   string // what the warning has to mention
+		asked  int
+	}{
+		{"Jev fails on a hunk", 0, func(c call) answer {
+			if !whole(c) {
+				return answer{status: 400}
+			}
+			return answer{values: map[string]float64{"push_back": 0.9, "added_copies": 0.9}}
+		}, "HTTP 400", 3},
+		{"the budget runs out among the hunks", 0.002, says(map[string]float64{"push_back": 0.9, "added_copies": 0.9}), "budget reached", 2},
+	}
+	// a.go has three hunks to ask about and b.go has one, which needs no request.
+	r := threeHunks(t)
+	r.write("b.go", "package b\n")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFake(t, tc.reply)
+			o := r.options(f)
+			o.Jobs, o.Budget = 1, tc.budget // one request at a time, so the count is exact
+
+			res := mustRun(t, o)
+
+			a, b := file(t, res, "a.go"), file(t, res, "b.go")
+			if res.Passed() || len(a.Failed) != 1 || len(b.Failed) != 1 || a.Answers["added_copies"].Value != 0.9 {
+				t.Errorf("passed %v with a.go failing %v and b.go failing %v, want the verdict to stand", res.Passed(), a.Failed, b.Failed)
+			}
+			if len(a.Where) != 0 || !reflect.DeepEqual(b.Where, map[string][2]int{"added_copies": {1, 1}}) {
+				t.Errorf("where = %v and %v, want none for a.go and the only hunk of b.go", a.Where, b.Where)
+			}
+			prefix := "couldn't find where the diagnoses point: "
+			if len(res.Warnings) != 1 || !strings.HasPrefix(res.Warnings[0], prefix) || !strings.Contains(res.Warnings[0], tc.want) {
+				t.Errorf("warnings = %q, want one that starts %q and mentions %q", res.Warnings, prefix, tc.want)
+			}
+			if f.count() != tc.asked || res.Usage.Requests != 2 {
+				t.Errorf("made %d requests and counted %d, want %d made with no hunk asked after the failure, and 2 counted", f.count(), res.Usage.Requests, tc.asked)
 			}
 		})
 	}

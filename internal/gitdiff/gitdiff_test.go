@@ -96,6 +96,24 @@ func byPath(t *testing.T, cs []Change) map[string]Change {
 	return m
 }
 
+// readAll lists every change between base and the working tree and reads its diff, by path.
+func readAll(t *testing.T, dir, base string) map[string]Diff {
+	t.Helper()
+	changes, err := Changes(dir, base, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := map[string]Diff{}
+	for _, c := range changes {
+		d, err := Read(dir, base, c)
+		if err != nil {
+			t.Fatalf("Read(%s): %v", c.Path, err)
+		}
+		m[c.Path] = d
+	}
+	return m
+}
+
 func paths(cs []Change) []string {
 	var out []string
 	for _, c := range cs {
@@ -268,9 +286,9 @@ func TestChangesCountCommittedStagedUnstagedAndUntracked(t *testing.T) {
 	if !reflect.DeepEqual(paths(got), want) {
 		t.Errorf("paths = %v, want %v", paths(got), want)
 	}
-	for _, c := range got {
-		if c.Diff == "" || !strings.HasPrefix(c.Diff, "--- ") {
-			t.Errorf("%s: diff does not start at its --- line: %q", c.Path, c.Diff)
+	for path, d := range readAll(t, dir, base) {
+		if !strings.HasPrefix(d.Text, "--- ") {
+			t.Errorf("%s: diff does not start at its --- line: %q", path, d.Text)
 		}
 	}
 }
@@ -300,8 +318,7 @@ func TestChangesListPathsSortedAndLeaveOutDeletes(t *testing.T) {
 	if !reflect.DeepEqual(paths(got), want) {
 		t.Fatalf("paths = %v, want %v", paths(got), want)
 	}
-	m := byPath(t, got)
-	if d := m["sub/moved.go"].Diff; !strings.HasPrefix(d, "--- a/c.go\n+++ b/sub/moved.go\n") {
+	if d := readAll(t, dir, base)["sub/moved.go"].Text; !strings.HasPrefix(d, "--- a/c.go\n+++ b/sub/moved.go\n") {
 		t.Errorf("renamed diff should show old and new paths, got %q", d)
 	}
 }
@@ -322,9 +339,9 @@ func TestChangesKeepOddFileNames(t *testing.T) {
 	if !reflect.DeepEqual(paths(got), want) {
 		t.Errorf("paths = %q, want %q", paths(got), want)
 	}
-	for _, c := range got {
-		if c.Diff == "" {
-			t.Errorf("%q has no diff", c.Path)
+	for path, d := range readAll(t, dir, base) {
+		if d.Text == "" {
+			t.Errorf("%q has no diff", path)
 		}
 	}
 }
@@ -335,6 +352,7 @@ func TestChangesNarrowedByPaths(t *testing.T) {
 	write(t, dir, "pkg/one.go", "package one\n")
 	write(t, dir, "pkg/deep/two.go", "package two\n")
 	write(t, dir, "other/three.go", "package three\n")
+	write(t, dir, "pkg2/four.go", "package four\n")
 	write(t, dir, "a.go", strings.Replace(lines(30), "line", "LINE", 1))
 	git(t, dir, "add", "pkg/one.go", "other/three.go")
 
@@ -342,11 +360,18 @@ func TestChangesNarrowedByPaths(t *testing.T) {
 		narrow []string
 		want   []string
 	}{
+		// A directory selects what is under it, and not a neighbour whose name starts the same.
 		{[]string{"pkg"}, []string{"pkg/deep/two.go", "pkg/one.go"}},
+		{[]string{"pkg/"}, []string{"pkg/deep/two.go", "pkg/one.go"}},
 		{[]string{"a.go"}, []string{"a.go"}},
+		{[]string{"./a.go"}, []string{"a.go"}},
 		{[]string{"a.go", "other"}, []string{"a.go", "other/three.go"}},
 		{[]string{"pkg/deep/two.go"}, []string{"pkg/deep/two.go"}},
-		{[]string{"nothing-here"}, nil},
+		{[]string{"pkg", "pkg/one.go"}, []string{"pkg/deep/two.go", "pkg/one.go"}},
+		{[]string{"."}, []string{"a.go", "other/three.go", "pkg/deep/two.go", "pkg/one.go", "pkg2/four.go"}},
+		// These are in the working tree or in the base, and hold no change.
+		{[]string{"b.go"}, nil},
+		{[]string{"pkg/deep", "c.go"}, []string{"pkg/deep/two.go"}},
 	}
 	for _, tc := range cases {
 		got, err := Changes(dir, base, tc.narrow)
@@ -372,22 +397,19 @@ func TestDiffHasNoGitHeaderLines(t *testing.T) {
 	write(t, dir, "b2.go", strings.Replace(lines(30), "line", "LINE", 2))
 	write(t, dir, "untracked.go", "package u\n")
 
-	got, err := Changes(dir, base, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := readAll(t, dir, base)
 	if len(got) != 4 {
-		t.Fatalf("got %d changes, want 4: %v", len(got), paths(got))
+		t.Fatalf("got %d changes, want 4: %v", len(got), got)
 	}
-	for _, c := range got {
-		if !strings.HasPrefix(c.Diff, "--- ") {
-			t.Errorf("%s: diff starts %q", c.Path, c.Diff[:min(20, len(c.Diff))])
+	for path, d := range got {
+		if !strings.HasPrefix(d.Text, "--- ") {
+			t.Errorf("%s: diff starts %q", path, d.Text[:min(20, len(d.Text))])
 		}
-		for _, l := range strings.Split(c.Diff, "\n") {
+		for _, l := range strings.Split(d.Text, "\n") {
 			for _, bad := range []string{"diff --git", "index ", "old mode", "new mode", "new file mode",
 				"similarity index", "rename from", "rename to"} {
 				if strings.HasPrefix(l, bad) {
-					t.Errorf("%s: diff keeps %q line %q", c.Path, bad, l)
+					t.Errorf("%s: diff keeps %q line %q", path, bad, l)
 				}
 			}
 		}
@@ -418,17 +440,6 @@ func TestSameChangeGivesSameDiffHoweverItIsHeld(t *testing.T) {
 		git(t, dir, "checkout", "-q", "-b", "feature")
 		return dir, base
 	}
-	diffs := func(dir, base string) map[string]string {
-		cs, err := Changes(dir, base, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		m := map[string]string{}
-		for _, c := range cs {
-			m[c.Path] = c.Diff
-		}
-		return m
-	}
 
 	committed, cb := setup()
 	edit(committed)
@@ -439,8 +450,8 @@ func TestSameChangeGivesSameDiffHoweverItIsHeld(t *testing.T) {
 	unstaged, ub := setup()
 	edit(unstaged)
 
-	a, b, c := diffs(committed, cb), diffs(staged, sb), diffs(unstaged, ub)
-	if len(a) != 2 || a["a.go"] == "" || a["fresh.go"] == "" {
+	a, b, c := readAll(t, committed, cb), readAll(t, staged, sb), readAll(t, unstaged, ub)
+	if len(a) != 2 || a["a.go"].Text == "" || a["fresh.go"].Text == "" {
 		t.Fatalf("committed diffs look wrong: %v", a)
 	}
 	if !reflect.DeepEqual(a, b) {
@@ -460,17 +471,13 @@ func TestBinaryFilesAreMarkedAndHaveNoDiff(t *testing.T) {
 	write(t, dir, "fresh.bin", "\x00\x00\x00\x01")
 	write(t, dir, "text.go", "package t\n")
 
-	got, err := Changes(dir, base, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := byPath(t, got)
+	m := readAll(t, dir, base)
 	for _, p := range []string{"img.png", "fresh.bin"} {
-		if !m[p].Binary || m[p].Diff != "" {
-			t.Errorf("%s: Binary=%v Diff=%q, want binary with no diff", p, m[p].Binary, m[p].Diff)
+		if !m[p].Binary || m[p].Text != "" {
+			t.Errorf("%s: Binary=%v Text=%q, want binary with no diff", p, m[p].Binary, m[p].Text)
 		}
 	}
-	if m["text.go"].Binary || m["text.go"].Diff == "" {
+	if m["text.go"].Binary || m["text.go"].Text == "" {
 		t.Errorf("text.go wrongly treated as binary: %+v", m["text.go"])
 	}
 }
@@ -534,16 +541,17 @@ func TestRootOutsideARepositoryIsAnError(t *testing.T) {
 }
 
 // fakeGit puts a git on the path that prints what the test says, so that output real git never
-// produces can be read.
-func fakeGit(t *testing.T, names, attrs string) {
+// produces can be read: names for the listing, attrs for the marks and patch for any file's diff.
+// Backslash escapes in the three are expanded.
+func fakeGit(t *testing.T, names, attrs, patch string) {
 	t.Helper()
 	dir := t.TempDir()
 	script := `#!/bin/sh
 case "$*" in
-*--name-status*) printf "$FAKE_NAMES" ;;
-*check-attr*) cat >/dev/null; printf "$FAKE_ATTRS" ;;
+*--name-status*) printf '%b' "$FAKE_NAMES" ;;
+*check-attr*) cat >/dev/null; printf '%b' "$FAKE_ATTRS" ;;
 *ls-files*) ;;
-*-U8*) printf -- '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n' ;;
+*-U8*) printf '%b' "$FAKE_PATCH" ;;
 esac
 `
 	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
@@ -552,11 +560,12 @@ esac
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("FAKE_NAMES", names)
 	t.Setenv("FAKE_ATTRS", attrs)
+	t.Setenv("FAKE_PATCH", patch)
 }
 
 // Contract: diff/D4
 func TestChangesReadOutputWithNoTrailingSeparator(t *testing.T) {
-	fakeGit(t, `M\0x`, `x\0`)
+	fakeGit(t, `M\0x`, `x\0`, ``)
 	got, err := Changes(t.TempDir(), "base", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -568,7 +577,7 @@ func TestChangesReadOutputWithNoTrailingSeparator(t *testing.T) {
 
 // Contract: diff/D4
 func TestChangesRejectAStatusWithNoPath(t *testing.T) {
-	fakeGit(t, `M`, ``)
+	fakeGit(t, `M`, ``, ``)
 	_, err := Changes(t.TempDir(), "base", nil)
 	if err == nil || !strings.Contains(err.Error(), "malformed") {
 		t.Errorf("err = %v", err)
@@ -591,5 +600,427 @@ func TestGitFailureCarriesItsMessageOrItsExitStatus(t *testing.T) {
 	_, err = run(dir, "", nil, "diff", "--quiet")
 	if err == nil || err.Error() != "git diff: exit status 1" {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// spyGit puts a git on the path that notes each call's arguments and then runs the real git. It
+// returns a function that lists the calls made so far.
+func spyGit(t *testing.T) func() []string {
+	t.Helper()
+	real, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	log := filepath.Join(dir, "calls")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$SPY_LOG\"\nexec \"$SPY_GIT\" \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("SPY_LOG", log)
+	t.Setenv("SPY_GIT", real)
+	return func() []string {
+		data, err := os.ReadFile(log)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		return strings.Split(strings.TrimSpace(string(data)), "\n")
+	}
+}
+
+// diffReads picks out the calls that read a file's diff, which are the diff calls that don't ask
+// for names alone.
+func diffReads(calls []string) []string {
+	var out []string
+	for _, c := range calls {
+		if strings.Contains(c, " diff ") && !strings.Contains(c, "--name-status") {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// Contract: diff/D17
+func TestListingReadsNoDiffAndAReadReadsOne(t *testing.T) {
+	dir, base := branchRepo(t)
+	write(t, dir, "a.go", strings.Replace(lines(30), "line", "LINE", 1))
+	git(t, dir, "mv", "b.go", "b2.go")
+	write(t, dir, "untracked.go", "package u\n")
+	calls := spyGit(t)
+
+	changes, err := Changes(dir, base, nil)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"a.go", "b2.go", "untracked.go"}; !reflect.DeepEqual(paths(changes), want) {
+		t.Fatalf("paths = %v, want %v", paths(changes), want)
+	}
+	if got := diffReads(calls()); len(got) != 0 {
+		t.Errorf("listing three changes read %d diffs, want none:\n%s", len(got), strings.Join(got, "\n"))
+	}
+
+	// Each read is one call for that file alone, and a rename is asked for by both of its names.
+	for i, tail := range []string{" -- a.go", " -- b.go b2.go", " -- /dev/null untracked.go"} {
+		d, err := Read(dir, base, changes[i])
+		if err != nil || !strings.HasPrefix(d.Text, "--- ") && tail != " -- b.go b2.go" {
+			t.Errorf("Read(%s) = %+v, %v", changes[i].Path, d, err)
+		}
+		if got := diffReads(calls()); len(got) != i+1 || !strings.HasSuffix(got[i], tail) {
+			t.Errorf("after reading %s the diff calls are:\n%s\nwant %d, the last ending %q", changes[i].Path, strings.Join(got, "\n"), i+1, tail)
+		}
+	}
+}
+
+// spaced returns n numbered lines with every fifth one blank, so a diff of it has blank lines in
+// its context.
+func spaced(n int) string {
+	var b strings.Builder
+	for i := 1; i <= n; i++ {
+		if i%5 != 0 {
+			b.WriteString("row ")
+			b.WriteString(string(rune('a' + i%26)))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// settingsRepo is a repository whose changes each read differently under some git setting.
+// algo.rb is the pair of texts from Myers's paper, which the histogram algorithm diffs another
+// way. gap.rb has two edits thirty lines apart, near enough for a wider hunk context to join,
+// among blank lines. slide.rb gains three lines that git can show starting at either of two
+// places, which its indent heuristic decides. fresh.rb is untracked, so its diff comes from
+// another git command. sub is a submodule, which git can print as a log. back.rb was staged with
+// a change and then put back as it was, which git lists as changed when it is told not to look.
+func settingsRepo(t *testing.T) (dir, base string) {
+	t.Helper()
+	dir = newRepo(t)
+	write(t, dir, "algo.rb", "A\nB\nC\nA\nB\nB\nA\n")
+	write(t, dir, "gap.rb", spaced(60))
+	write(t, dir, "back.rb", "as it was\n")
+	write(t, dir, "slide.rb", "1\n2\na\n\nb\n3\n4\n")
+	base = commit(t, dir, "base")
+	git(t, dir, "checkout", "-q", "-b", "feature")
+	write(t, dir, "algo.rb", "C\nB\nA\nB\nA\nC\n")
+	gap := strings.Replace(spaced(60), "row k\n", "ROW K\n", 1)
+	write(t, dir, "gap.rb", strings.Replace(gap, "row o\n", "ROW O\n", 1))
+	write(t, dir, "fresh.rb", "def fresh\n\n  1\nend\n")
+	write(t, dir, "slide.rb", "1\n2\na\n\nb\na\n\nb\n3\n4\n")
+	// An empty directory with an entry in the index is a submodule nobody has checked out.
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "update-index", "--add", "--cacheinfo", "160000,"+base+",sub")
+	write(t, dir, "back.rb", "otherwise\n")
+	git(t, dir, "add", "back.rb")
+	write(t, dir, "back.rb", "as it was\n")
+	return dir, base
+}
+
+// Contract: diff/D13
+func TestDiffIsTheSameWhateverTheUsersGitSettings(t *testing.T) {
+	dir, base := settingsRepo(t)
+	want := readAll(t, dir, base)
+	for _, path := range []string{"algo.rb", "gap.rb", "slide.rb", "fresh.rb", "sub"} {
+		if !strings.HasPrefix(want[path].Text, "--- ") {
+			t.Fatalf("%s has no diff to compare with: %+v", path, want[path])
+		}
+	}
+	if len(want) != 5 {
+		t.Fatalf("listed %d changes, want 5 with back.rb left out: %v", len(want), want)
+	}
+	if _, hunks := Hunks(want["gap.rb"].Text); len(hunks) != 2 {
+		t.Fatalf("gap.rb has %d hunks, want 2 for a wider context to join", len(hunks))
+	}
+	same := func(t *testing.T) {
+		t.Helper()
+		got := readAll(t, dir, base)
+		for path := range want {
+			if got[path] != want[path] {
+				t.Errorf("%s reads differently:\n%s\nwant:\n%s", path, got[path].Text, want[path].Text)
+			}
+		}
+		if len(got) != len(want) {
+			t.Errorf("listed %d changes, want %d", len(got), len(want))
+		}
+	}
+
+	// The test process reads no global configuration, so the settings go in the repository's own.
+	for _, setting := range []string{
+		"color.ui=always",
+		"color.diff=always",
+		"diff.external=/bin/echo",
+		"diff.algorithm=histogram",
+		"diff.mnemonicPrefix=true",
+		"diff.noprefix=true",
+		"diff.interHunkContext=20",
+		"diff.indentHeuristic=false",
+		"diff.suppressBlankEmpty=true",
+		"diff.submodule=log",
+		"diff.autoRefreshIndex=false",
+	} {
+		t.Run(setting, func(t *testing.T) {
+			key, value, _ := strings.Cut(setting, "=")
+			git(t, dir, "config", key, value)
+			defer git(t, dir, "config", "--unset", key)
+			same(t)
+		})
+	}
+	t.Run("GIT_EXTERNAL_DIFF", func(t *testing.T) {
+		t.Setenv("GIT_EXTERNAL_DIFF", "/bin/echo")
+		same(t)
+	})
+	// git reads extra diff options from this variable, and they win over the command line.
+	t.Run("GIT_DIFF_OPTS", func(t *testing.T) {
+		t.Setenv("GIT_DIFF_OPTS", "--unified=0")
+		same(t)
+	})
+	t.Run("a text conversion", func(t *testing.T) {
+		attributes := filepath.Join(dir, ".git", "info", "attributes")
+		if err := os.WriteFile(attributes, []byte("*.rb diff=shout\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(attributes)
+		git(t, dir, "config", "diff.shout.textconv", "tr a-z A-Z <")
+		defer git(t, dir, "config", "--unset", "diff.shout.textconv")
+		same(t)
+	})
+}
+
+// Contract: diff/D15
+func TestADiffThatCantBeReadIsAnError(t *testing.T) {
+	cases := map[string]string{
+		"nothing at all":              ``,
+		"a header and no hunks":       `diff --git a/x b/x\nindex 1111111..2222222 100644\n`,
+		"what a diff tool printed":    `x /tmp/old 1111111 100644 /tmp/new 2222222 100644\n`,
+		"a diff in colour":            `\033[1mdiff --git a/x b/x\033[m\n\033[1m--- a/x\033[m\n\033[1m+++ b/x\033[m\n\033[36m@@ -1 +1 @@\033[m\n\033[31m-a\033[m\n\033[32m+b\033[m\n`,
+		"a new file that isn't empty": `diff --git a/x b/x\nnew file mode 100644\nindex 0000000..e69de29\n`,
+		"one mode line":               `diff --git a/x b/x\nnew mode 100755\n`,
+		"a rename with an edit lost":  `diff --git a/w b/x\nsimilarity index 97%\nrename from w\nrename to x\n`,
+	}
+	for name, patch := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, dir, "x", "content\n")
+			fakeGit(t, `M\0x\0`, ``, patch)
+			changes, err := Changes(dir, "base", nil)
+			if err != nil || len(changes) != 1 {
+				t.Fatalf("Changes = %+v, %v", changes, err)
+			}
+
+			d, err := Read(dir, "base", changes[0])
+
+			if err == nil || !strings.HasSuffix(err.Error(), " x") || d != (Diff{}) {
+				t.Errorf("Read = %+v, %v: want no diff and an error naming x", d, err)
+			}
+		})
+	}
+}
+
+// Contract: diff/D15
+func TestADiffWithNoHunksIsReadWhenGitSaysWhyItHasNone(t *testing.T) {
+	cases := map[string]struct {
+		patch string
+		want  Diff
+	}{
+		"a change of mode": {`diff --git a/x b/x\nold mode 100644\nnew mode 100755\n`, Diff{NoContent: true}},
+		"a pure rename":    {`diff --git a/w b/x\nsimilarity index 100%\nrename from w\nrename to x\n`, Diff{NoContent: true}},
+		"a binary file":    {`diff --git a/x b/x\nindex 1111111..2222222 100644\nBinary files a/x and b/x differ\n`, Diff{Binary: true}},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			write(t, dir, "x", "content\n")
+			fakeGit(t, `M\0x\0`, ``, tc.patch)
+			changes, err := Changes(dir, "base", nil)
+			if err != nil || len(changes) != 1 {
+				t.Fatalf("Changes = %+v, %v", changes, err)
+			}
+
+			d, err := Read(dir, "base", changes[0])
+
+			if err != nil || d != tc.want {
+				t.Errorf("Read = %+v, %v: want %+v", d, err, tc.want)
+			}
+		})
+	}
+}
+
+// Contract: diff/D15
+func TestOnlyAModeARenameOrAnEmptyNewFileHasNoContent(t *testing.T) {
+	dir, base := branchRepo(t)
+	if err := os.Chmod(filepath.Join(dir, "a.go"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "mv", "b.go", "moved.go")
+	write(t, dir, "empty.go", "")
+	git(t, dir, "add", "empty.go")
+	write(t, dir, "untracked-empty.go", "")
+	write(t, dir, "c.go", strings.Replace(lines(30), "line", "LINE", 1))
+
+	got := readAll(t, dir, base)
+
+	for _, path := range []string{"a.go", "moved.go", "empty.go", "untracked-empty.go"} {
+		if got[path] != (Diff{NoContent: true}) {
+			t.Errorf("%s = %+v, want no content and nothing else", path, got[path])
+		}
+	}
+	if d := got["c.go"]; d.NoContent || d.Binary || d.Text == "" {
+		t.Errorf("c.go = %+v, want a diff", d)
+	}
+	if len(got) != 5 {
+		t.Errorf("read %d changes, want 5", len(got))
+	}
+}
+
+// Contract: diff/D14
+func TestAFileNameIsNeverReadAsAPattern(t *testing.T) {
+	dir := newRepo(t)
+	odd := []string{":evil.rb", ":(bogus)x.rb", "lib/*.rb", "lib/a.rb", "lib/b.rb"}
+	for _, name := range odd {
+		write(t, dir, name, "first in "+name+"\n")
+	}
+	// A pattern in the attributes still matches, and marks the files it names and no other.
+	write(t, dir, ".gitattributes", "lib/a.rb linguist-generated\n")
+	base := commit(t, dir, "base")
+	git(t, dir, "checkout", "-q", "-b", "feature")
+	for _, name := range odd {
+		write(t, dir, name, "second in "+name+"\n")
+	}
+
+	changes, err := Changes(dir, base, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{":(bogus)x.rb", ":evil.rb", "lib/*.rb", "lib/a.rb", "lib/b.rb"}; !reflect.DeepEqual(paths(changes), want) {
+		t.Fatalf("paths = %q, want %q", paths(changes), want)
+	}
+	for _, c := range changes {
+		d, err := Read(dir, base, c)
+		if err != nil {
+			t.Errorf("Read(%s): %v", c.Path, err)
+			continue
+		}
+		want := "--- a/" + c.Path + "\n+++ b/" + c.Path + "\n@@ -1 +1 @@\n-first in " + c.Path + "\n+second in " + c.Path + "\n"
+		if d.Text != want {
+			t.Errorf("%s reads:\n%s\nwant its own diff and nobody else's:\n%s", c.Path, d.Text, want)
+		}
+		if c.Marked != (c.Path == "lib/a.rb") {
+			t.Errorf("%s Marked = %v", c.Path, c.Marked)
+		}
+	}
+}
+
+// Contract: diff/D5
+func TestNarrowingToARenamedFileStillSeesItAsARename(t *testing.T) {
+	dir, base := branchRepo(t)
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, dir, "mv", "c.go", "sub/moved.go")
+	write(t, dir, "sub/moved.go", strings.Replace(lines(30), "line", "LINE", 3))
+	want := readAll(t, dir, base)["sub/moved.go"]
+	if !strings.HasPrefix(want.Text, "--- a/c.go\n+++ b/sub/moved.go\n") {
+		t.Fatalf("the full listing reads no rename: %q", want.Text)
+	}
+
+	for _, narrow := range []string{"sub/moved.go", "sub"} {
+		changes, err := Changes(dir, base, []string{narrow})
+		if err != nil || !reflect.DeepEqual(paths(changes), []string{"sub/moved.go"}) {
+			t.Fatalf("Changes narrowed to %s = %v, %v", narrow, paths(changes), err)
+		}
+		got, err := Read(dir, base, changes[0])
+		if err != nil || got != want {
+			t.Errorf("narrowed to %s the diff is:\n%s\nwant the same as the full listing's:\n%s", narrow, got.Text, want.Text)
+		}
+	}
+}
+
+// Contract: diff/D16
+func TestAPathThatIsNeitherInTheWorkingTreeNorInTheBaseIsAnError(t *testing.T) {
+	dir, base := branchRepo(t)
+	write(t, dir, "a.go", strings.Replace(lines(30), "line", "LINE", 1))
+	write(t, dir, "lib/new.go", "package lib\n")
+	git(t, dir, "rm", "-q", "b.go")
+	write(t, dir, ".gitignore", "ignored.go\n")
+	write(t, dir, "ignored.go", "package ignored\n")
+
+	for _, narrow := range [][]string{{"nosuch.go"}, {"lib/nosuch.go"}, {"a.go", "lib/nosuch.go"}, {"lib/new.go/deeper"}} {
+		changes, err := Changes(dir, base, narrow)
+		missing := narrow[len(narrow)-1]
+		if err == nil || err.Error() != "no such path: "+missing || changes != nil {
+			t.Errorf("Changes narrowed to %v = %v, %v: want no changes and an error naming %s", narrow, paths(changes), err, missing)
+		}
+	}
+
+	// A file that was deleted is in the base, and an ignored one is in the working tree.
+	for _, narrow := range []string{"b.go", "ignored.go", "c.go", "lib"} {
+		if _, err := Changes(dir, base, []string{narrow}); err != nil {
+			t.Errorf("Changes narrowed to %s: %v, want no error for a path that exists", narrow, err)
+		}
+	}
+}
+
+// Contract: diff/D6
+func TestAFileThatBecomesASymlinkKeepsNoGitHeaderLine(t *testing.T) {
+	dir, base := branchRepo(t)
+	if err := os.Remove(filepath.Join(dir, "a.go")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("b.go", filepath.Join(dir, "a.go")); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+
+	got := readAll(t, dir, base)["a.go"].Text
+
+	// Git prints a change of type as the old file's removal and then the link's arrival.
+	removed := "--- a/a.go\n+++ /dev/null\n@@ -1,30 +0,0 @@\n-" + strings.ReplaceAll(strings.TrimSuffix(lines(30), "\n"), "\n", "\n-") + "\n"
+	added := "--- /dev/null\n+++ b/a.go\n@@ -0,0 +1 @@\n+b.go\n\\ No newline at end of file\n"
+	if got != removed+added {
+		t.Errorf("the diff is:\n%s\nwant:\n%s", got, removed+added)
+	}
+}
+
+// Contract: diff/D6
+func TestNormaliseDropsGitsHeaderLinesWhereverTheyAre(t *testing.T) {
+	hunk := "@@ -1 +1 @@\n-a\n+b\n index stays, being a line of the file\n"
+	raw := "diff --git a/x b/x\nold mode 100644\nnew mode 100755\nindex 1..2\n--- a/x\n+++ b/x\n" + hunk
+	want := "--- a/x\n+++ b/x\n" + hunk
+	for _, header := range []string{
+		"diff --git a/y b/y", "index 3..4 100644", "old mode 100644", "new mode 100755", "new file mode 120000",
+		"deleted file mode 100644", "similarity index 90%", "dissimilarity index 60%", "rename from x", "rename to y",
+		"copy from x", "copy to y",
+	} {
+		raw += header + "\n"
+	}
+	raw += "--- a/y\n+++ b/y\n" + hunk
+	want += "--- a/y\n+++ b/y\n" + hunk
+	if got := normalise(raw); got != want {
+		t.Errorf("normalise = %q, want %q", got, want)
+	}
+}
+
+// Contract: diff/D3
+// Contract: diff/D15
+func TestAnUntrackedDirectoryThatGitListsByNameIsNoChange(t *testing.T) {
+	dir, base := branchRepo(t)
+	// Git lists a repository nested in this one, and a link to a directory, as it lists a file,
+	// and has no diff to print for either.
+	write(t, dir, "nested/inner.go", "package inner\n")
+	git(t, filepath.Join(dir, "nested"), "init", "-q")
+	write(t, dir, "pkg/x.go", "package pkg\n")
+	if err := os.Symlink("pkg", filepath.Join(dir, "linked")); err != nil {
+		t.Skipf("no symlinks here: %v", err)
+	}
+	if err := os.Symlink("a.go", filepath.Join(dir, "alias.go")); err != nil {
+		t.Fatal(err)
+	}
+
+	got := readAll(t, dir, base)
+
+	if len(got) != 2 || got["pkg/x.go"].Text == "" || !strings.HasSuffix(got["alias.go"].Text, "\n+a.go\n\\ No newline at end of file\n") {
+		t.Errorf("read %+v, want pkg/x.go and the link to a file, which reads as the name it points at", got)
 	}
 }
