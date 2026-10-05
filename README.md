@@ -73,7 +73,7 @@ What to do
     added_copies: Did the change add logic that is a near-copy of logic already in the file?
     added_impossible_guards: Did the change add checks or fallbacks for states the surrounding code shows can't happen?
   Rework the change so they no longer apply, then run qualm again.
-  A qualm is an opinion. If the change is right as it stands, a person can keep it:
+  A qualm is an opinion. If the change is right as it stands, a person can keep it from the top of the repository:
     qualm keep lib/mutineer/coverage_map.rb --reason "..."
 ```
 
@@ -131,7 +131,7 @@ Deleted and binary files, and files with no content change. Vendored and built d
 
 Jev charges about four cents per million input tokens, and a typical pull request costs a fraction of a cent. `--budget` caps a run, at one dollar by default.
 
-Every answer is cached under a hash of the exact request, in your user cache directory. The same diff gets the same verdict, and a replay costs nothing. `--cache DIR` moves the cache and `--no-cache` skips it.
+Every answer is cached under a hash of the exact request, in your user cache directory. The same diff gets the same verdict, and a replay costs nothing. `--cache DIR` moves the cache and `--no-cache` skips it. qualm trusts what it finds in its cache, so keep the cache somewhere a pull request can't write to.
 
 `qualm --dry-run` lists the files it would send and what that would cost, and sends nothing.
 
@@ -179,7 +179,7 @@ That is the whole of the evidence. It is one codebase in one language, and nobod
 
 qualm has its own Contract in `contract/`: 89 numbered obligations across nine primitives (skip, diff, questions, config, jev, judge, gate, report and cli). Every obligation has at least one test that names it with a `// Contract: <primitive>/<id>` comment. A test in `internal/contractcheck` publishes contract coverage and fails while any obligation lacks a test.
 
-The tests are held to account too. [Gremlins](https://github.com/go-gremlins/gremlins) mutates every package and reruns the suite. The tests kill 381 mutants, and the 7 that survive are each explained in [`docs/mutation.md`](docs/mutation.md).
+The tests are held to account too. [Gremlins](https://github.com/go-gremlins/gremlins) mutates every package and reruns the suite. The tests kill 382 mutants, and the 7 that survive are each explained in [`docs/mutation.md`](docs/mutation.md).
 
 Before a release, qualm runs on its own change.
 
@@ -191,6 +191,9 @@ Before a release, qualm runs on its own change.
 - It judges one file at a time, so it can't see that a change copied logic from another file. exhale catches that for Ruby.
 - The threshold rests on one codebase's history.
 - A failing file is asked about again hunk by hunk to find where each diagnosis points, which costs one more request per hunk.
+- An untracked file named `-` at the top of the repository stops the run with exit 2, because git reads that name as standard input. Staging the file is enough.
+- A file that git is told to assume unchanged, or to skip in the working tree, is read as the index has it.
+- On a file system that ignores case, a path argument typed in the wrong case matches no change, and qualm reports nothing to judge.
 - There is no survey mode for scoring a whole codebase yet.
 
 ## License

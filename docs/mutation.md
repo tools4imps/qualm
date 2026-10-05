@@ -1,6 +1,6 @@
 # Mutation testing
 
-Gremlins, run package by package with `--timeout-coefficient 15 --workers 4`.
+Gremlins, run package by package with `--timeout-coefficient 15 --workers 4`. A mutant that makes a loop run forever is stopped by the timeout and counted as killed. gitdiff has two.
 
 | Package | Killed | Lived | Not covered |
 | --- | --- | --- | --- |
@@ -9,13 +9,13 @@ Gremlins, run package by package with `--timeout-coefficient 15 --workers 4`.
 | questions | 45 | 0 | 1 |
 | config | 11 | 0 | 0 |
 | jev | 47 | 0 | 3 |
-| report | 40 | 0 | 9 |
+| report | 41 | 0 | 8 |
 | gitdiff | 89 | 5 | 1 |
 | check | 94 | 0 | 0 |
 | cli | 30 | 1 | 12 |
-| **Total** | **381** | **7** | **26** |
+| **Total** | **382** | **7** | **25** |
 
-Every survivor in the table is explained below. The "not covered" rows fall into two groups. Two are lines that cannot run in a test. The other 24 are `case` clauses of a `switch`, which Gremlins' coverage map never attributes to a test even though tests run them. For those, each mutation was applied by hand in a scratch copy of the repository and the package's tests failed every time, so they are killed in fact. One of them, the upper bound of `--budget` at `cli.go:154`, is killed by a test added in this pass.
+Every survivor in the table is explained below. The "not covered" rows fall into two groups. Two are lines that cannot run in a test. The other 23 are `case` clauses of a `switch`, which Gremlins' coverage map never attributes to a test even though tests run them. For those, each mutation was applied by hand in a scratch copy of the repository and the package's tests failed every time, so they are killed in fact. One of them, the upper bound of `--budget` at `cli.go:154`, is killed by a test added in this pass.
 
 ## Mutants no test can kill
 
@@ -48,8 +48,8 @@ Every survivor in the table is explained below. The "not covered" rows fall into
 Each was applied by hand in a scratch copy, and the package's tests failed.
 
 - **internal/jev/client.go**, lines 104 and 109: negation of `err != nil` and `status == http.StatusOK`.
-- **internal/report/text.go**, lines 30, 35, 45, 49, 107, 109, 111 and 197: the `switch` clauses of the report's layout, headline, choice wording and shell quoting, including the boundary and negation at line 35.
-- **internal/gitdiff/gitdiff.go**, line 243: negation of `text != ""` in `Read`.
+- **internal/report/text.go**, lines 31, 36, 46, 50, 108, 110 and 112: the `switch` clauses of the report's layout, headline and choice wording, including the boundary and negation at line 36.
+- **internal/gitdiff/gitdiff.go**, line 244: negation of `text != ""` in `Read`.
 - **internal/cli/cli.go**, lines 148 to 154: the format, threshold, jobs and budget checks in `validate`, with the boundary and negation of each comparison.
 
 ## Worth a look

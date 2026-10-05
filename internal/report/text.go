@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/tools4imps/qualm/internal/check"
 	"github.com/tools4imps/qualm/internal/jev"
@@ -151,10 +152,8 @@ func writeAdvice(w io.Writer, qs []questions.Question, failing []check.File) {
 	} else {
 		fmt.Fprintln(w, "  A reviewer would likely ask for these changes to be simplified before they merge.")
 	}
-	var paths []string
 	fired := map[string]bool{}
 	for _, f := range failing {
-		paths = append(paths, shellWord(f.Path))
 		for _, q := range f.Fired(qs) {
 			fired[q.ID] = true
 		}
@@ -170,33 +169,50 @@ func writeAdvice(w io.Writer, qs []questions.Question, failing []check.File) {
 		}
 		fmt.Fprintln(w, "  Rework the change so they no longer apply, then run qualm again.")
 	}
-	fmt.Fprintln(w, "  A qualm is an opinion. If the change is right as it stands, a person can keep it:")
-	fmt.Fprintf(w, "    qualm keep %s --reason \"...\"\n", strings.Join(paths, " "))
+	fmt.Fprintln(w, "  A qualm is an opinion. If the change is right as it stands, a person can keep it from the top of the repository:")
+	fmt.Fprintf(w, "    qualm keep %s --reason \"...\"\n", keepPaths(failing))
+}
+
+// keepPaths is the failing paths as the words of the keep command, which reads them from the top
+// of the repository as the report does. Only a path of printable ASCII is written out. A control
+// character has no quoting that sh, bash and zsh all read back on one line. And bash under an
+// encoding such as Shift JIS takes the last byte of a UTF-8 character and the closing quote for
+// one character, which lets the rest of the line run. With any other path among them the command
+// is left for the reader to fill in.
+func keepPaths(failing []check.File) string {
+	words := make([]string, len(failing))
+	for i, f := range failing {
+		if strings.ContainsFunc(f.Path, func(r rune) bool { return r < ' ' || r > '~' }) {
+			return "PATH..."
+		}
+		words[i] = shellWord(f.Path)
+	}
+	return strings.Join(words, " ")
 }
 
 // shown is a path or a reason as the report prints it. Both come from the repository, where
-// anyone can name a file or write a keep. One that holds a line break or any other character a
-// terminal doesn't print as itself is quoted with that character escaped, so it can't pass for a
-// line of the report.
+// anyone can name a file or write a keep. One that holds a line break, any other character a
+// terminal doesn't print as itself, or a byte that isn't UTF-8 is quoted with that part escaped,
+// so it can't pass for a line of the report.
 func shown(s string) string {
-	if strings.ContainsFunc(s, func(r rune) bool { return !strconv.IsPrint(r) }) {
+	if !utf8.ValidString(s) || strings.ContainsFunc(s, func(r rune) bool { return !strconv.IsPrint(r) }) {
 		return strconv.Quote(s)
 	}
 	return s
 }
 
-// shellWord is a path as a shell reads it back, for a command the reader is told to run. A path
-// of nothing but plain characters stands as it is and any other goes in single quotes, where a
-// shell reads nothing but the closing quote. One that shown would escape goes in $'...', the
-// quoting that understands those escapes, to stay on one line.
+// shellWord is a path as a shell reads it back, for a command the reader is told to run. One that
+// starts with a dash gets "./" in front, so that qualm can't take it for a flag. A path of nothing
+// but plain characters then stands as it is, and any other goes in single quotes, where a shell
+// reads nothing but the closing quote.
 func shellWord(path string) string {
 	plain := func(r rune) bool {
 		return 'a' <= r && r <= 'z' || 'A' <= r && r <= 'Z' || '0' <= r && r <= '9' || strings.ContainsRune("_./-", r)
 	}
-	switch quoted := shown(path); {
-	case quoted != path:
-		return "$'" + strings.ReplaceAll(quoted[1:len(quoted)-1], "'", `\'`) + "'"
-	case strings.ContainsFunc(path, func(r rune) bool { return !plain(r) }):
+	if strings.HasPrefix(path, "-") {
+		path = "./" + path
+	}
+	if strings.ContainsFunc(path, func(r rune) bool { return !plain(r) }) {
 		return "'" + strings.ReplaceAll(path, "'", `'\''`) + "'"
 	}
 	return path

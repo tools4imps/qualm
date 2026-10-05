@@ -210,6 +210,20 @@ func TestKeepRecordsAndALaterCheckSkipsTheFile(t *testing.T) {
 }
 
 // Contract: cli/L1
+func TestKeepTakesAPathThatStartsWithADashWhenItIsWrittenFromTheDirectory(t *testing.T) {
+	w := newWorld(t, 0.9)
+	write(t, w.dir, "-n.go", "package main\n")
+	o := w.run(t, "keep", "./-n.go", "--reason", "it is fine")
+	if o.code != 0 || o.stdout != "qualm: kept -n.go\n" {
+		t.Fatalf("keep: %+v", o)
+	}
+	cfg, err := config.Load(w.dir)
+	if err != nil || len(cfg.Keeps) != 1 || cfg.Keeps[0].Path != "-n.go" {
+		t.Errorf("config %+v err %v, want one keep for -n.go", cfg, err)
+	}
+}
+
+// Contract: cli/L1
 func TestCheckWithAPathJudgesThatPath(t *testing.T) {
 	w := newWorld(t, 0.9)
 	o := w.run(t, "lib/a.go")

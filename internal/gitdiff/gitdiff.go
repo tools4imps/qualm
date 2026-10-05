@@ -49,11 +49,12 @@ var settings = []string{
 
 // pinned opens every diff call. Colour, an external diff tool, a text conversion, another
 // algorithm, other prefixes or a submodule printed as a log would each make the same change read
-// differently on the next machine, or not read as a diff at all.
+// differently on the next machine, or not read as a diff at all. Read knows a new empty file by
+// its whole id, which --full-index prints.
 var pinned = []string{
 	"diff", "--no-color", "--no-ext-diff", "--no-textconv", "--diff-algorithm=myers",
 	"--src-prefix=a/", "--dst-prefix=b/", "--inter-hunk-context=0", "--indent-heuristic",
-	"--submodule=short",
+	"--submodule=short", "--full-index",
 }
 
 // diff runs git diff with the pinned options ahead of the given ones.
@@ -246,7 +247,7 @@ func Read(dir, base string, c Change) (Diff, error) {
 		return Diff{Binary: true}, nil
 	case has("old mode ") && has("new mode "), // the mode alone changed
 		has("similarity index 100%"), // a rename with no edit
-		has("new file mode ") && isEmpty(filepath.Join(dir, filepath.FromSlash(c.Path))):
+		has("new file mode ") && addsEmpty(raw):
 		return Diff{NoContent: true}, nil
 	}
 	return Diff{}, fmt.Errorf("git printed no diff that can be read for %s", c.Path)
@@ -258,11 +259,21 @@ func isDir(file string) bool {
 	return err == nil && info.IsDir()
 }
 
-// isEmpty reports whether file is a regular file with nothing in it. A new file's diff has no
-// hunks only then.
-func isEmpty(file string) bool {
-	info, err := os.Lstat(file)
-	return err == nil && info.Mode().IsRegular() && info.Size() == 0
+// emptyBlobs are the ids git gives a file with nothing in it, under SHA-1 and under SHA-256.
+var emptyBlobs = []string{
+	"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391",
+	"473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813",
+}
+
+// addsEmpty reports whether git's index line gives the new side of a diff the id of an empty
+// file. A new file's diff has no hunks only then. The id is asked of git and not of the working
+// tree, which in a sparse checkout doesn't hold every file the branch added. The index line comes
+// after the "diff --git" line, so it is looked for after a line break.
+func addsEmpty(raw string) bool {
+	_, rest, _ := strings.Cut(raw, "\nindex ")
+	line, _, _ := strings.Cut(rest, "\n")
+	_, id, _ := strings.Cut(line, "..")
+	return slices.Contains(emptyBlobs, id)
 }
 
 // raw is the change's diff as git prints it.

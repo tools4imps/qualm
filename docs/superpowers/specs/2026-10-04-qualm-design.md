@@ -160,7 +160,7 @@ What to do
     grew_a_big_unit: Did the change make an already long function or class longer, where the new work could have gone in a unit of its own?
     added_copies: Did the change add logic that is a near-copy of logic already in the file?
   Rework the change so they no longer apply, then run qualm again.
-  A qualm is an opinion. If the change is right as it stands, a person can keep it:
+  A qualm is an opinion. If the change is right as it stands, a person can keep it from the top of the repository:
     qualm keep lib/mutineer/coverage_map.rb --reason "..."
 ```
 
@@ -226,14 +226,14 @@ qualm sends diffs to OpenRouter and on to TypeSafe. The README says so plainly.
 A reviewer who hadn't seen the code said not to ship, and these are the fixes. Where this section and the text above disagree, this section and the Contract are right.
 
 - **Git's output is pinned.** Every diff call passes fixed options for colour, external diff tools, text conversion, the algorithm, the prefixes and the context, and empties `GIT_DIFF_OPTS`. A user's settings used to be able to make every file read as having no content, and the run exited 0.
-- **An unreadable diff is an error.** Only a mode-only change, a pure rename or a new empty file has no content to judge.
+- **An unreadable diff is an error.** Only a mode-only change, a pure rename or a new empty file has no content to judge. A new file counts as empty when git gives it the id of an empty file, so a sparse checkout that leaves the file out of the working tree reads the same.
 - **File names are never read as patterns.** Every git call passes `--literal-pathspecs`.
 - **Git's header lines are dropped wherever they appear** in a diff, which matters when a file changes type.
 - **Listing reads no diff.** Names come first, the skip rules and git attributes are applied, and a diff is read only for a file that isn't skipped.
 - **Path arguments narrow the list after renames are paired.** One that exists neither in the working tree nor in the base is an error.
 - **A keep binds to the lines the change adds and removes**, and no longer to line numbers or context. A change elsewhere in the file on the base branch leaves it standing.
 - **The cache key also covers the gate thresholds**, and a cached entry is used only when it answers every question asked.
-- **The text report counts skipped files by reason** on its second line, escapes control characters in paths and reasons, and quotes paths in the suggested `qualm keep` command.
+- **The text report counts skipped files by reason** on its second line, escapes control characters in paths and reasons, and quotes paths in the suggested `qualm keep` command in the one form sh, bash and zsh all read. A path that starts with a dash gets `./` in front. When a path holds anything but printable ASCII the command prints `PATH...` and leaves the paths to the reader, since bash under an encoding such as Shift JIS misreads a quoted UTF-8 name. The advice says to run the command from the top of the repository, which is where the report's paths start.
 - **Warnings.** An error while finding where the diagnoses point no longer discards the verdict. It is reported as a warning, and so is a cache that can't be written.
 - **A hunk over the piece limit is asked in pieces** in the where pass too.
 - **Questions.** A question named as the gate keeps its own threshold unless the gate setting gives one. A role must be one of the three or left out. A choice question is never a diagnosis, and its answer prints with its name unless it describes the change.

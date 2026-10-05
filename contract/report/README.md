@@ -13,7 +13,7 @@ The report is read by a coding agent as often as by a person. It has to say what
 - **R7** A dry run lists each file it would judge with its diff size and estimated tokens, and ends with the estimated total cost.
 - **R8** In a file's lines a question is named by its id with the underscores as spaces. The list of questions that fired uses the id as written, so it can be found in the config.
 - **R9** Whenever files were skipped, the text report counts them by reason on one line.
-- **R10** A path or a reason holding control characters is printed escaped. Paths in the suggested `qualm keep` command are quoted for a shell, in the `$'...'` form when they hold control characters.
+- **R10** A path or a reason holding control characters, or bytes that aren't UTF-8, is printed escaped. Paths in the suggested `qualm keep` command are quoted so that sh, bash and zsh each read them back as they are, and one that starts with a dash is written so that it can't be taken for a flag. When a path holds anything but printable ASCII, the command is printed with `PATH...` in place of the paths.
 - **R11** Warnings are listed at the end of the text report and in the JSON report.
 - **R12** A choice answer is printed with its question's name, except for a question that describes the change, which prints the option alone.
 

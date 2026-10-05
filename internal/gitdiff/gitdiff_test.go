@@ -792,13 +792,15 @@ func TestDiffIsTheSameWhateverTheUsersGitSettings(t *testing.T) {
 // Contract: diff/D15
 func TestADiffThatCantBeReadIsAnError(t *testing.T) {
 	cases := map[string]string{
-		"nothing at all":              ``,
-		"a header and no hunks":       `diff --git a/x b/x\nindex 1111111..2222222 100644\n`,
-		"what a diff tool printed":    `x /tmp/old 1111111 100644 /tmp/new 2222222 100644\n`,
-		"a diff in colour":            `\033[1mdiff --git a/x b/x\033[m\n\033[1m--- a/x\033[m\n\033[1m+++ b/x\033[m\n\033[36m@@ -1 +1 @@\033[m\n\033[31m-a\033[m\n\033[32m+b\033[m\n`,
-		"a new file that isn't empty": `diff --git a/x b/x\nnew file mode 100644\nindex 0000000..e69de29\n`,
-		"one mode line":               `diff --git a/x b/x\nnew mode 100755\n`,
-		"a rename with an edit lost":  `diff --git a/w b/x\nsimilarity index 97%\nrename from w\nrename to x\n`,
+		"nothing at all":               ``,
+		"a header and no hunks":        `diff --git a/x b/x\nindex 1111111..2222222 100644\n`,
+		"what a diff tool printed":     `x /tmp/old 1111111 100644 /tmp/new 2222222 100644\n`,
+		"a diff in colour":             `\033[1mdiff --git a/x b/x\033[m\n\033[1m--- a/x\033[m\n\033[1m+++ b/x\033[m\n\033[36m@@ -1 +1 @@\033[m\n\033[31m-a\033[m\n\033[32m+b\033[m\n`,
+		"a new file that isn't empty":  `diff --git a/x b/x\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..2222222222222222222222222222222222222222\n`,
+		"a new file with half an id":   `diff --git a/x b/x\nnew file mode 100644\nindex 0000000..e69de29\n`,
+		"an empty file that isn't new": `diff --git a/x b/x\nindex 1111111111111111111111111111111111111111..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391 100644\n`,
+		"one mode line":                `diff --git a/x b/x\nnew mode 100755\n`,
+		"a rename with an edit lost":   `diff --git a/w b/x\nsimilarity index 97%\nrename from w\nrename to x\n`,
 	}
 	for name, patch := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -828,6 +830,9 @@ func TestADiffWithNoHunksIsReadWhenGitSaysWhyItHasNone(t *testing.T) {
 		"a change of mode": {`diff --git a/x b/x\nold mode 100644\nnew mode 100755\n`, Diff{NoContent: true}},
 		"a pure rename":    {`diff --git a/w b/x\nsimilarity index 100%\nrename from w\nrename to x\n`, Diff{NoContent: true}},
 		"a binary file":    {`diff --git a/x b/x\nindex 1111111..2222222 100644\nBinary files a/x and b/x differ\n`, Diff{Binary: true}},
+		// The file in the working tree has text in it. Git's id for the new side is what counts.
+		"a new empty file":               {`diff --git a/x b/x\nnew file mode 100644\nindex 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391\n`, Diff{NoContent: true}},
+		"a new empty file under SHA-256": {`diff --git a/x b/x\nnew file mode 100644\nindex 0000000000000000000000000000000000000000000000000000000000000000..473a0f4c3be8a93681a267e3b1e9a7dcda1185436fe141f7749120a303721813\n`, Diff{NoContent: true}},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -872,6 +877,45 @@ func TestOnlyAModeARenameOrAnEmptyNewFileHasNoContent(t *testing.T) {
 	}
 	if len(got) != 5 {
 		t.Errorf("read %d changes, want 5", len(got))
+	}
+}
+
+// Contract: diff/D15
+func TestANewFileThatGitHasOnlySeenEmptyIsReadOnceItHasText(t *testing.T) {
+	dir, base := branchRepo(t)
+	write(t, dir, "staged.go", "")
+	git(t, dir, "add", "staged.go")
+	write(t, dir, "staged.go", "package a\n")
+	write(t, dir, "intent.go", "package b\n")
+	git(t, dir, "add", "-N", "intent.go")
+
+	got := readAll(t, dir, base)
+
+	for _, path := range []string{"staged.go", "intent.go"} {
+		if d := got[path]; d.NoContent || d.Binary || !strings.Contains(d.Text, "\n+package ") {
+			t.Errorf("%s = %+v, want the diff of its text", path, d)
+		}
+	}
+}
+
+// Contract: diff/D15
+func TestANewEmptyFileOutsideASparseCheckoutHasNoContent(t *testing.T) {
+	dir, base := branchRepo(t)
+	write(t, dir, "pkg/__init__.py", "")
+	write(t, dir, "pkg/mod.py", "x = 1\n")
+	commit(t, dir, "add a package")
+	git(t, dir, "sparse-checkout", "set", "--cone", "lib")
+	if _, err := os.Stat(filepath.Join(dir, "pkg")); err == nil {
+		t.Fatal("the sparse checkout kept pkg in the working tree")
+	}
+
+	got := readAll(t, dir, base)
+
+	if got["pkg/__init__.py"] != (Diff{NoContent: true}) {
+		t.Errorf("pkg/__init__.py = %+v, want no content and nothing else", got["pkg/__init__.py"])
+	}
+	if d := got["pkg/mod.py"]; d.NoContent || d.Binary || d.Text == "" {
+		t.Errorf("pkg/mod.py = %+v, want a diff", d)
 	}
 }
 
