@@ -1,30 +1,116 @@
 name: Release
 
-on:
-  push:
-    tags: ["v*"]
+# Publishes qualm when the version in internal/cli/version.go is not yet on
+# RubyGems, using trusted publishing: GitHub hands RubyGems a short-lived OIDC
+# token and RubyGems hands back a short-lived API key. No stored secret, no API
+# key in the repo, and no MFA prompt.
+#
+# This workflow is the identity RubyGems trusts, so its FILENAME is part of the
+# trust configuration. Renaming this file breaks publishing until the gem's
+# trusted publisher is updated to match (docs: guides.rubygems.org/trusted-publishing).
+#
+# Two ways to release. Bump version.go and land it on main, and the push
+# trigger below publishes it. Or run the workflow by hand. Either way a version
+# already on RubyGems is skipped before any credentials are fetched, so a
+# re-run, or a push that touched version.go without changing the number, is
+# a no-op.
+#
+# qualm is a Go binary, so one release is two things made from the same build:
+# a gem per platform that carries the binary, and a GitHub release with the
+# same binaries for anyone without Ruby. The tag is cut here too. Nobody tags
+# by hand.
 
-permissions:
-  contents: write
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+    paths:
+      - "internal/cli/version.go"
 
 jobs:
   release:
     runs-on: ubuntu-latest
+
+    # A GitHub environment lets you require a review before anything reaches
+    # RubyGems, and it is the second half of the trusted publisher's identity.
+    # The publisher registered on rubygems.org names this environment, so
+    # renaming it breaks publishing the same way renaming the file does.
+    environment: release
+
+    permissions:
+      # Cutting the tag and the GitHub release.
+      contents: write
+      # The OIDC token this exchanges for a RubyGems API key. Publishing fails
+      # without it, and the failure looks like an ordinary auth error.
+      id-token: write
+
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
           go-version: stable
 
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: .ruby-version
+
+      # A release that cannot pass its own suite is not a release. CI already
+      # ran this on the commit; running it again here costs a minute and
+      # removes the "which commit did we actually build" question.
       - name: Test suite
         run: go test ./...
 
-      - uses: goreleaser/goreleaser-action@v6
-        with:
-          version: "~> v2"
-          args: release --clean
+      # Cross-compiles the binary for every platform, then builds a gem and an
+      # archive around each one. --strict escalates any gemspec warning to a
+      # build failure.
+      - name: Build the gems and the archives
+        run: rake release:build
+
+      # A gem that builds can still install broken: a missing binary, a lost
+      # executable bit, a command that isn't wired to it. So the gem for this
+      # runner is installed and its command has to answer with the version.
+      - name: The built gem installs and runs
+        run: |
+          version=$(rake release:version)
+          export GEM_HOME="$(mktemp -d)"
+          gem install --local --no-document "pkg/qualm-$version-x86_64-linux.gem"
+          got=$("$GEM_HOME/bin/qualm" --version)
+          if [ "$got" != "qualm $version" ]; then
+            echo "::error::the installed gem answered '$got', expected 'qualm $version'"
+            exit 1
+          fi
+
+      # Decides whether there is anything to publish before touching
+      # credentials, so a no-op run never needs the trusted publisher at all.
+      - name: Is this version already on RubyGems?
+        id: check
+        run: |
+          status=$(rake release:status)
+          echo "$status"
+          echo "$status" >> "$GITHUB_OUTPUT"
+
+      # Exchanges the OIDC token for a short-lived RubyGems API key and writes
+      # it where `gem push` looks. The gem must list this repo, this workflow
+      # file, and the release environment as a trusted publisher on RubyGems.
+      - uses: rubygems/configure-rubygems-credentials@v2.1.0
+        if: steps.check.outputs.publish == 'true'
+
+      - name: Push to RubyGems
+        if: steps.check.outputs.publish == 'true'
+        run: rake release:push
+
+      # Comes after RubyGems on purpose: a gem push can't be undone, so the
+      # tag only exists for a version that really shipped. A release that is
+      # already there is left alone, which keeps a re-run safe.
+      - name: GitHub release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="v$(rake release:version)"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "skip  $tag is already a GitHub release"
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --title "$tag" --generate-notes \
+              pkg/*.tar.gz pkg/*.zip pkg/checksums.txt
+          fi

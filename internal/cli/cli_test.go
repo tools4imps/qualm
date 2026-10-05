@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -182,9 +183,11 @@ func (w *world) runCached(t *testing.T, cache string, args ...string) outcome {
 	return w.run(t, append([]string{"--cache", cache}, args...)...)
 }
 
-func TestVersionIsExported(t *testing.T) {
-	if Version != "0.1.0" {
-		t.Fatalf("Version = %q", Version)
+// The release tooling reads the number out of version.go with a pattern, and RubyGems needs it to
+// be a plain three-part version.
+func TestVersionIsThreeNumbers(t *testing.T) {
+	if !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(Version) {
+		t.Fatalf("Version = %q, want three numbers with dots between", Version)
 	}
 }
 
@@ -365,7 +368,7 @@ func TestMissingKeyExitsTwoButADryRunNeedsNone(t *testing.T) {
 func TestVersionAndHelpExitZeroAndWinOverTheRest(t *testing.T) {
 	w := newWorld(t, 0.2)
 	o := w.run(t, "--bogus", "--version")
-	if o.code != 0 || o.stdout != "qualm 0.1.0\n" || o.stderr != "" {
+	if o.code != 0 || o.stdout != "qualm "+Version+"\n" || o.stderr != "" {
 		t.Fatalf("version: %+v", o)
 	}
 	for _, h := range []string{"--help", "-h"} {

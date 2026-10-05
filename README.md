@@ -10,6 +10,19 @@ qualm has no parser, so it judges code in any language. It is one binary with no
 
 ## Install
 
+With Ruby:
+
+```ruby
+# Gemfile
+group :development, :test do
+  gem "qualm", require: false
+end
+```
+
+or `gem install qualm`. The gem carries the binary for your platform and a `qualm` command that runs it.
+
+With Go:
+
 ```bash
 go install github.com/tools4imps/qualm/cmd/qualm@latest
 ```
@@ -182,6 +195,12 @@ qualm has its own Contract in `contract/`: 89 numbered obligations across nine p
 The tests are held to account too. [Gremlins](https://github.com/go-gremlins/gremlins) mutates every package and reruns the suite. The tests kill 382 mutants, and the 7 that survive are each explained in [`docs/mutation.md`](docs/mutation.md).
 
 Before a release, qualm runs on its own change.
+
+## Releasing
+
+The version lives in `internal/cli/version.go`. Land a new number on `main` and the release workflow does the rest: it builds a gem and an archive for every platform, pushes the gems to RubyGems through [trusted publishing](https://guides.rubygems.org/trusted-publishing/), then cuts the tag and the GitHub release. A version already on RubyGems is skipped, so a re-run is safe.
+
+`rake release:build` does the build half locally, into `pkg/`.
 
 ## Known limits in 0.1
 
