@@ -72,9 +72,7 @@ func Load(dir string) (Config, error) {
 			continue
 		}
 		var b bytes.Buffer
-		if err := json.Compact(&b, q.Criteria); err != nil {
-			return Config{}, fmt.Errorf("%s: question %q: %w", File, q.ID, err)
-		}
+		json.Compact(&b, q.Criteria) // can't fail on bytes the decoder has just accepted
 		c.Questions[i].Criteria = b.Bytes()
 	}
 	return c, nil

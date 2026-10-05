@@ -2,6 +2,8 @@ package check
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"sync"
 
 	"github.com/tools4imps/qualm/internal/config"
@@ -10,9 +12,6 @@ import (
 	"github.com/tools4imps/qualm/internal/questions"
 	"github.com/tools4imps/qualm/internal/skip"
 )
-
-// defaultJobs is how many files are judged at once when the options don't say.
-const defaultJobs = 8
 
 // The statuses a File can have.
 const (
@@ -48,7 +47,7 @@ func Run(ctx context.Context, o Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if err := judgeAll(ctx, j, res.Files, changes, o.Jobs); err != nil {
+	if err := j.all(ctx, res.Files, changes); err != nil {
 		return Result{}, err
 	}
 	res.Usage = j.usage()
@@ -56,7 +55,7 @@ func Run(ctx context.Context, o Options) (Result, error) {
 }
 
 // resolve merges the config into the built-in questions. A threshold given for the run wins over
-// the config's.
+// the config's. A set that doesn't resolve is a mistake in the config, so the error names the file.
 func resolve(cfg config.Config, threshold float64) ([]questions.Question, error) {
 	var gate config.Gate
 	if cfg.Gate != nil {
@@ -65,7 +64,11 @@ func resolve(cfg config.Config, threshold float64) ([]questions.Question, error)
 	if threshold > 0 {
 		gate.Threshold = threshold
 	}
-	return questions.Resolve(gate.Question, gate.Threshold, cfg.Drop, cfg.Questions)
+	qs, err := questions.Resolve(gate.Question, gate.Threshold, cfg.Drop, cfg.Questions)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", config.File, err)
+	}
+	return qs, nil
 }
 
 // changesSince finds the base commit for ref and what has changed in dir since, narrowed to paths
@@ -123,21 +126,29 @@ func skipReason(c gitdiff.Change, rules skip.Rules) string {
 // anyJudged reports whether any file is bound for Jev. A run with none needs no client, no cache
 // and no key, so a change to prose alone passes anywhere.
 func anyJudged(files []File) bool {
-	for _, f := range files {
-		if f.Status == statusJudged {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(files, func(f File) bool { return f.Status == statusJudged })
 }
 
-// judgeAll judges the files marked for it, each against the change at the same index, jobs at a
-// time. It returns the first error. That error cancels the context, so the files still waiting
-// send nothing.
-func judgeAll(ctx context.Context, j *judge, files []File, changes []gitdiff.Change, jobs int) error {
-	if jobs < 1 {
-		jobs = defaultJobs
+// all judges the files marked for it, each against the change at the same index, and then finds
+// where to look in the ones that failed. The second pass waits for the first because a worker that
+// stopped to wait for its file's hunks could leave no worker free to ask about them.
+func (j *judge) all(ctx context.Context, files []File, changes []gitdiff.Change) error {
+	err := j.each(ctx, len(files), func(ctx context.Context, i int) error {
+		if files[i].Status != statusJudged {
+			return nil
+		}
+		return j.file(ctx, &files[i], changes[i])
+	})
+	if err != nil {
+		return err
 	}
+	return j.where(ctx, files, changes)
+}
+
+// each calls do for every index below n, jobs at a time, and returns the first error. That error
+// cancels the context, so the calls still waiting send nothing. Everything a run asks of Jev goes
+// through here, which is what holds the requests in flight to jobs.
+func (j *judge) each(ctx context.Context, n int, do func(ctx context.Context, i int) error) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var (
@@ -146,21 +157,19 @@ func judgeAll(ctx context.Context, j *judge, files []File, changes []gitdiff.Cha
 		first   error
 	)
 	next := make(chan int)
-	for w := 0; w < jobs; w++ {
+	for range min(j.jobs, n) {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
 			for i := range next {
-				if err := j.file(ctx, &files[i], changes[i]); err != nil {
+				if err := do(ctx, i); err != nil {
 					once.Do(func() { first = err; cancel() })
 				}
 			}
 		}()
 	}
-	for i := range files {
-		if files[i].Status == statusJudged {
-			next <- i
-		}
+	for i := range n {
+		next <- i
 	}
 	close(next)
 	workers.Wait()

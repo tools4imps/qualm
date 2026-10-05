@@ -8,49 +8,65 @@ import (
 	"github.com/tools4imps/qualm/internal/questions"
 )
 
-// firedAt is the value from which a diagnosis counts as having fired.
-const firedAt = 0.5
+// search is the hunt through one failing file's hunks for the lines its fired diagnoses point at.
+type search struct {
+	file    *File
+	fired   []questions.Question
+	header  string
+	hunks   []gitdiff.Hunk
+	replies []jev.Reply // one for each hunk
+}
 
-// where finds the lines of the new file that each fired diagnosis points at, so the reader of a
-// failing file knows which part of the change to rework.
-func (j *judge) where(ctx context.Context, c gitdiff.Change, answers map[string]jev.Answer) (map[string][2]int, error) {
-	fired := firedDiagnoses(j.qs, answers)
-	if len(fired) == 0 {
-		return nil, nil
+// where finds the lines of the new file that each fired diagnosis points at in every failing
+// file, so the reader knows which part of a change to rework. Each hunk is asked about on its
+// own, and a diagnosis points at the hunk where it is strongest.
+func (j *judge) where(ctx context.Context, files []File, changes []gitdiff.Change) error {
+	type ask struct {
+		*search
+		hunk int
 	}
-	header, hunks := gitdiff.Hunks(c.Diff)
-	at := make(map[string][2]int, len(fired))
-	if len(hunks) == 1 {
-		// One hunk is the only place to point, so asking again would buy nothing.
-		for _, q := range fired {
-			at[q.ID] = [2]int{hunks[0].Start, hunks[0].End}
+	var searches []*search
+	var asks []ask
+	for i := range files {
+		fired := files[i].Fired(j.qs)
+		if len(files[i].Failed) == 0 || len(fired) == 0 {
+			continue
 		}
-		return at, nil
-	}
-	strongest := map[string]float64{}
-	for _, h := range hunks {
-		reply, err := j.ask(ctx, j.request(c.Path, header+h.Text, fired), fired)
-		if err != nil {
-			return nil, err
-		}
-		for _, q := range fired {
-			v := reply.Answers[q.ID].Value
-			// Only a higher value moves the pointer, which leaves a tie with the earlier hunk.
-			if _, seen := at[q.ID]; !seen || v > strongest[q.ID] {
-				strongest[q.ID], at[q.ID] = v, [2]int{h.Start, h.End}
+		header, hunks := gitdiff.Hunks(changes[i].Diff)
+		s := &search{&files[i], fired, header, hunks, make([]jev.Reply, len(hunks))}
+		searches = append(searches, s)
+		// One hunk is the only place to point, so asking about it again would buy nothing.
+		if len(hunks) > 1 {
+			for h := range hunks {
+				asks = append(asks, ask{s, h})
 			}
 		}
 	}
-	return at, nil
+	err := j.each(ctx, len(asks), func(ctx context.Context, i int) (err error) {
+		s, h := asks[i].search, asks[i].hunk
+		s.replies[h], err = j.ask(ctx, j.request(s.file.Path, s.header+s.hunks[h].Text, s.fired), s.fired)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	for _, s := range searches {
+		s.file.Where = s.strongest()
+	}
+	return nil
 }
 
-// firedDiagnoses lists the diagnoses whose answer reached firedAt, in question order.
-func firedDiagnoses(qs []questions.Question, answers map[string]jev.Answer) []questions.Question {
-	var fired []questions.Question
-	for _, q := range qs {
-		if q.Role == "diagnosis" && answers[q.ID].Value >= firedAt {
-			fired = append(fired, q)
+// strongest points each fired diagnosis at the hunk that answered it highest.
+func (s *search) strongest() map[string][2]int {
+	at := make(map[string][2]int, len(s.fired))
+	for _, q := range s.fired {
+		var top float64
+		for h, hunk := range s.hunks {
+			// Only a higher value moves the pointer, which leaves a tie with the earlier hunk.
+			if v := s.replies[h].Answers[q.ID].Value; h == 0 || v > top {
+				top, at[q.ID] = v, [2]int{hunk.Start, hunk.End}
+			}
 		}
 	}
-	return fired
+	return at
 }

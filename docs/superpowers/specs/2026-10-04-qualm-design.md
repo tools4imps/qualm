@@ -140,7 +140,7 @@ Skipped by default, before any request:
 - binary files
 - tests, unless `--include-tests`: `*_test.go`, `*_test.rb`, `*_spec.rb`, `*.test.*`, `*.spec.*`, `test_*.py`, and paths under `test/`, `tests/`, `spec/`, `__tests__/`
 
-`skip` in the config adds patterns. A pattern with no slash matches the file name anywhere. `**` matches any number of directories.
+`skip` in the config adds patterns. A pattern with no slash matches the file name anywhere. `**` matches any number of directories. A pattern ending in a slash matches everything under that directory.
 
 ## The report
 

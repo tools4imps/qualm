@@ -15,28 +15,30 @@ type Hunk struct {
 // blob hashes and modes that differ between machines. A diff with no such line, which is what git
 // prints for a binary file or a pure rename, normalises to "".
 func Normalise(raw string) string {
-	if strings.HasPrefix(raw, "--- ") {
-		return raw
-	}
-	if i := strings.Index(raw, "\n--- "); i >= 0 {
-		return raw[i+1:]
+	if i := lineStart(raw, "--- "); i >= 0 {
+		return raw[i:]
 	}
 	return ""
 }
 
+// lineStart is where the first line of s that starts with prefix begins, or -1 when none does.
+func lineStart(s, prefix string) int {
+	if strings.HasPrefix(s, prefix) {
+		return 0
+	}
+	if i := strings.Index(s, "\n"+prefix); i >= 0 {
+		return i + 1
+	}
+	return -1
+}
+
 // Hunks splits a normalised diff into its header, which is the "---" and "+++" lines, and its hunks.
 func Hunks(diff string) (header string, hunks []Hunk) {
-	cut := -1
-	if strings.HasPrefix(diff, "@@ ") {
-		cut = 0
-	} else if i := strings.Index(diff, "\n@@ "); i >= 0 {
-		cut = i + 1
-	}
+	cut := lineStart(diff, "@@ ")
 	if cut < 0 {
 		return diff, nil
 	}
-	header = diff[:cut]
-	rest := diff[cut:]
+	header, rest := diff[:cut], diff[cut:]
 	for rest != "" {
 		// A body line always starts with a space, "+", "-" or "\", so "\n@@ " can only be a new hunk.
 		end := len(rest)
@@ -66,10 +68,7 @@ func newRange(text string) (start, end int) {
 	if hasCount {
 		n, _ = strconv.Atoi(count)
 	}
-	if n == 0 {
-		return start, start
-	}
-	return start, start + n - 1
+	return start, start + max(n, 1) - 1
 }
 
 // Split cuts a normalised diff into pieces of at most limit bytes where it can. Each piece starts

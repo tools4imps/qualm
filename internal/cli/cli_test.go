@@ -17,6 +17,32 @@ import (
 	"github.com/tools4imps/qualm/internal/config"
 )
 
+// TestMain cuts the tests off from the developer's git configuration and home. The code under
+// test runs git itself, so the whole test process has to be cut off and not only the git commands
+// the tests run.
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "qualm-cli-")
+	if err != nil {
+		panic(err)
+	}
+	for name, value := range map[string]string{
+		"HOME":              home,
+		"XDG_CONFIG_HOME":   filepath.Join(home, "config"),
+		"GIT_CONFIG_GLOBAL": os.DevNull,
+		"GIT_CONFIG_SYSTEM": os.DevNull,
+	} {
+		os.Setenv(name, value)
+	}
+	// A test run from a git hook inherits these, and they would point every git command at the
+	// hook's repository.
+	for _, name := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"} {
+		os.Unsetenv(name)
+	}
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
+}
+
 // fakeJev answers every question in a request in Jev's raw reply format.
 type fakeJev struct {
 	*httptest.Server
@@ -83,11 +109,9 @@ func git(t *testing.T, dir string, args ...string) {
 }
 
 // newRepo builds a repository on main with one commit, then a feature branch where lib/a.go
-// is changed. The git configuration of the developer is shut out.
+// is changed.
 func newRepo(t *testing.T) string {
 	t.Helper()
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
-	t.Setenv("GIT_CONFIG_SYSTEM", "/dev/null")
 	dir := t.TempDir()
 	git(t, dir, "init", "-q", "-b", "main")
 	git(t, dir, "config", "user.name", "Test")
@@ -311,11 +335,18 @@ func TestReportsGoToStdoutAndErrorsToStderr(t *testing.T) {
 
 // Contract: cli/L8
 func TestConfigMistakeExitsTwo(t *testing.T) {
-	w := newWorld(t, 0.2)
-	write(t, w.dir, "qualm.json", `{"bogus": 1}`)
-	o := w.run(t)
-	if o.code != 2 || !strings.Contains(o.stderr, "qualm.json") || o.stdout != "" {
-		t.Fatalf("%+v", o)
+	for name, config := range map[string]string{
+		"a key qualm doesn't know":              `{"bogus": 1}`,
+		"a drop of a question that isn't there": `{"drop": ["bogus"]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t, 0.2)
+			write(t, w.dir, "qualm.json", config)
+			o := w.run(t)
+			if o.code != 2 || !strings.HasPrefix(o.stderr, "qualm: qualm.json: ") || o.stdout != "" {
+				t.Fatalf("%+v", o)
+			}
+		})
 	}
 }
 
@@ -366,7 +397,6 @@ func TestKeepNeedsPathsAndReason(t *testing.T) {
 }
 
 func TestOutsideARepositoryExitsTwo(t *testing.T) {
-	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(t.TempDir()))
 	w := &world{dir: t.TempDir(), fake: newFakeJev(t, 0.2), key: "k"}
 	if o := w.run(t); o.code != 2 || o.stderr == "" {

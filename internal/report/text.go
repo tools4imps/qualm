@@ -2,9 +2,10 @@
 package report
 
 import (
+	"cmp"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -58,22 +59,28 @@ func writeBlock(w io.Writer, qs []questions.Question, f check.File, width int) {
 	}
 	fmt.Fprintf(w, "%-*s  %s\n", width, f.Path, strings.Join(gated, ", "))
 	for _, q := range qs {
-		a, ok := f.Answers[q.ID]
-		if q.Type == "choice" && ok && a.Choice != "" && a.Choice != "same" {
+		// Only the answer to a choice question holds a choice.
+		if a := f.Answers[q.ID]; a.Choice != "" && a.Choice != "same" {
 			fmt.Fprintf(w, "  %s %.2f\n", a.Choice, a.Value)
 		}
 	}
-	writeDiagnoses(w, f, fired(qs, f))
+	writeDiagnoses(w, qs, f)
 }
 
-func writeDiagnoses(w io.Writer, f check.File, ds []questions.Question) {
-	texts := make([]string, len(ds))
+// writeDiagnoses prints the diagnoses that fired on the file, strongest first. The sort is stable
+// so ties keep the order the questions were asked in.
+func writeDiagnoses(w io.Writer, qs []questions.Question, f check.File) {
+	fired := f.Fired(qs)
+	slices.SortStableFunc(fired, func(a, b questions.Question) int {
+		return cmp.Compare(f.Answers[b.ID].Value, f.Answers[a.ID].Value)
+	})
+	texts := make([]string, len(fired))
 	width := 0
-	for i, q := range ds {
+	for i, q := range fired {
 		texts[i] = fmt.Sprintf("%s %.2f", spaced(q.ID), f.Answers[q.ID].Value)
 		width = max(width, len(texts[i]))
 	}
-	for i, q := range ds {
+	for i, q := range fired {
 		line := "  " + texts[i]
 		if span, ok := f.Where[q.ID]; ok {
 			line = fmt.Sprintf("%-*s  %s", width+2, line, lines(span))
@@ -89,19 +96,6 @@ func lines(span [2]int) string {
 	return fmt.Sprintf("lines %d-%d", span[0], span[1])
 }
 
-// fired returns the diagnosis questions the file answered at 0.5 or above, strongest first.
-// The sort is stable so ties keep the order the questions were asked in.
-func fired(qs []questions.Question, f check.File) []questions.Question {
-	var out []questions.Question
-	for _, q := range qs {
-		if a, ok := f.Answers[q.ID]; ok && q.Role == "diagnosis" && a.Value >= 0.5 {
-			out = append(out, q)
-		}
-	}
-	sort.SliceStable(out, func(i, j int) bool { return f.Answers[out[i].ID].Value > f.Answers[out[j].ID].Value })
-	return out
-}
-
 // writeAdvice tells the reader what to do next, with the questions that fired on any failing file.
 func writeAdvice(w io.Writer, qs []questions.Question, failing []check.File) {
 	fmt.Fprintln(w, "\nWhat to do")
@@ -111,38 +105,26 @@ func writeAdvice(w io.Writer, qs []questions.Question, failing []check.File) {
 		fmt.Fprintln(w, "  A reviewer would likely ask for these changes to be simplified before they merge.")
 	}
 	var paths []string
+	fired := map[string]bool{}
 	for _, f := range failing {
 		paths = append(paths, f.Path)
-	}
-	any := false
-	for _, q := range qs {
-		if firedAnywhere(q, failing) {
-			if !any {
-				fmt.Fprintln(w, "  The questions that fired:")
-				any = true
-			}
-			fmt.Fprintf(w, "    %s: %s\n", q.ID, q.Instructions)
+		for _, q := range f.Fired(qs) {
+			fired[q.ID] = true
 		}
 	}
-	if any {
-		fmt.Fprintln(w, "  Rework the change so they no longer apply, then run qualm again.")
-	} else {
+	if len(fired) == 0 {
 		fmt.Fprintln(w, "  Simplify the change, then run qualm again.")
+	} else {
+		fmt.Fprintln(w, "  The questions that fired:")
+		for _, q := range qs {
+			if fired[q.ID] {
+				fmt.Fprintf(w, "    %s: %s\n", q.ID, q.Instructions)
+			}
+		}
+		fmt.Fprintln(w, "  Rework the change so they no longer apply, then run qualm again.")
 	}
 	fmt.Fprintln(w, "  A qualm is an opinion. If the change is right as it stands, a person can keep it:")
 	fmt.Fprintf(w, "    qualm keep %s --reason \"...\"\n", strings.Join(paths, " "))
-}
-
-func firedAnywhere(q questions.Question, failing []check.File) bool {
-	if q.Role != "diagnosis" {
-		return false
-	}
-	for _, f := range failing {
-		if a, ok := f.Answers[q.ID]; ok && a.Value >= 0.5 {
-			return true
-		}
-	}
-	return false
 }
 
 func spaced(id string) string { return strings.ReplaceAll(id, "_", " ") }

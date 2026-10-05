@@ -90,22 +90,17 @@ func TestProseAndDataFiles(t *testing.T) {
 
 // Contract: skip/K4
 func TestTestsAreSkippedUnlessIncluded(t *testing.T) {
-	var skipped, judged []string
-	for _, p := range []string{
+	skipped := []string{
 		"foo_test.go", "pkg/foo_test.go", "foo_test.rb", "foo_spec.rb", "spec/models/foo_spec.rb",
 		"foo.test.ts", "web/foo.test.js", "foo.spec.ts", "web/foo.spec.js",
 		"test_foo.py", "pkg/test_foo.py",
 		"test/helper.rb", "tests/helper.py", "spec/helper.rb", "__tests__/foo.js",
 		"a/b/c/test/helper.rb", "a/b/c/tests/x.go", "a/b/spec/support/x.rb", "a/__tests__/deep/foo.js",
-	} {
-		skipped = append(skipped, p)
 	}
-	for _, p := range []string{
+	judged := []string{
 		"testing.go", "contest.go", "latest.go", "foo_testing.go", "test.go", "attest_foo.py",
 		"src/testdata_loader.go", "src/tests.go", "src/specs.rb", "src/footest.go", "foo.testing.ts",
 		"src/tester/main.go", "src/specimen/main.go", "latest/main.go", "src/test_helpers/x.go",
-	} {
-		judged = append(judged, p)
 	}
 
 	var cases []reasonCase

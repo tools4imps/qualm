@@ -1,13 +1,14 @@
 package check
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 
 	"github.com/tools4imps/qualm/internal/config"
 	"github.com/tools4imps/qualm/internal/gitdiff"
@@ -23,6 +24,9 @@ const pieceLimit = 60000
 
 // defaultBudget is what a run may spend, in dollars, when no budget is given.
 const defaultBudget = 1
+
+// defaultJobs is how many requests are in flight at once when the options don't say.
+const defaultJobs = 8
 
 // closeMargin is how near its threshold a gating value has to be to count as a close call.
 const closeMargin = 0.05
@@ -53,6 +57,7 @@ type judge struct {
 	budget *jev.Budget
 	model  string
 	qs     []questions.Question
+	jobs   int
 }
 
 // newJudge gathers what asking needs from the options and the config.
@@ -60,12 +65,15 @@ func newJudge(o Options, cfg config.Config, qs []questions.Question) (*judge, er
 	if o.Client == nil {
 		return nil, errors.New("no client to reach Jev with")
 	}
-	j := &judge{client: o.Client, budget: jev.NewBudget(defaultBudget), model: config.DefaultModel, qs: qs}
-	if o.Budget != 0 {
-		j.budget = jev.NewBudget(o.Budget)
+	j := &judge{
+		client: o.Client,
+		budget: jev.NewBudget(cmp.Or(o.Budget, defaultBudget)),
+		model:  cmp.Or(cfg.Model, config.DefaultModel),
+		qs:     qs,
+		jobs:   o.Jobs,
 	}
-	if cfg.Model != "" {
-		j.model = cfg.Model
+	if j.jobs < 1 {
+		j.jobs = defaultJobs
 	}
 	if !o.NoCache {
 		dir, err := cacheDir(o.CacheDir)
@@ -103,31 +111,20 @@ func (j *judge) request(path, change string, qs []questions.Question) jev.Reques
 	return jev.Request{Model: j.model, State: state, Questions: wire}
 }
 
-// file judges one changed file: its answers, the gates it failed and, when it failed, where to look.
+// file judges one changed file: it asks every question about the change, piece by piece when the
+// change is large, and notes the gates the answers failed.
 func (j *judge) file(ctx context.Context, f *File, c gitdiff.Change) error {
-	answers, err := j.answers(ctx, c)
-	if err != nil {
-		return err
-	}
-	f.Answers, f.Failed = answers, failed(j.qs, answers)
-	if len(f.Failed) == 0 {
-		return nil
-	}
-	f.Where, err = j.where(ctx, c, answers)
-	return err
-}
-
-// answers asks every question about one file's change, piece by piece when the change is large.
-func (j *judge) answers(ctx context.Context, c gitdiff.Change) (map[string]jev.Answer, error) {
 	var replies []jev.Reply
 	for _, piece := range gitdiff.Split(c.Diff, pieceLimit) {
 		reply, err := j.ask(ctx, j.request(c.Path, piece, j.qs), j.qs)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		replies = append(replies, reply)
 	}
-	return combine(j.qs, replies), nil
+	f.Answers = combine(j.qs, replies)
+	f.Failed = failed(j.qs, f.Answers)
+	return nil
 }
 
 // ask answers a request from the cache when it can, and from Jev when it can't.
@@ -193,7 +190,7 @@ func median(replies []jev.Reply, id string) float64 {
 	for i, r := range replies {
 		values[i] = r.Answers[id].Value
 	}
-	sort.Float64s(values)
+	slices.Sort(values)
 	return values[len(values)/2]
 }
 

@@ -4,10 +4,12 @@ package questions
 
 import (
 	"bytes"
+	"cmp"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
+	"slices"
 )
 
 // Question is one thing qualm asks Jev about a change.
@@ -74,7 +76,7 @@ func Resolve(gateID string, gateThreshold float64, drop []string, extra []Questi
 		if i < 0 {
 			return nil, fmt.Errorf("drop names unknown question %q", id)
 		}
-		qs = append(qs[:i], qs[i+1:]...)
+		qs = slices.Delete(qs, i, i+1)
 	}
 
 	if gateID != "" && gateID != defaultGate {
@@ -82,11 +84,7 @@ func Resolve(gateID string, gateThreshold float64, drop []string, extra []Questi
 		if i < 0 {
 			return nil, fmt.Errorf("gate names unknown question %q", gateID)
 		}
-		qs[i].Gates, qs[i].Role = true, "gate"
-		qs[i].Threshold = gateThreshold
-		if gateThreshold == 0 {
-			qs[i].Threshold = DefaultThreshold
-		}
+		qs[i].Gates, qs[i].Role, qs[i].Threshold = true, "gate", cmp.Or(gateThreshold, DefaultThreshold)
 		// The old gate stops gating but its answer still shows as a diagnosis.
 		if p := indexOf(qs, defaultGate); p >= 0 {
 			qs[p].Gates, qs[p].Role, qs[p].Threshold = false, "diagnosis", 0
@@ -107,18 +105,13 @@ func Resolve(gateID string, gateThreshold float64, drop []string, extra []Questi
 		gating = gating || q.Gates
 	}
 	if !gating {
-		return nil, fmt.Errorf("no question gates, so a run could never fail")
+		return nil, errors.New("no question gates, so a run could never fail")
 	}
 	return qs, nil
 }
 
 func indexOf(qs []Question, id string) int {
-	for i, q := range qs {
-		if q.ID == id {
-			return i
-		}
-	}
-	return -1
+	return slices.IndexFunc(qs, func(q Question) bool { return q.ID == id })
 }
 
 // validate catches a mistake in a question before it is sent as a different question.
@@ -132,8 +125,7 @@ func (q Question) validate() error {
 	switch q.Type {
 	case "noul":
 	case "score":
-		var levels []string
-		if err := json.Unmarshal(q.Criteria, &levels); err != nil || len(levels) < 2 || len(levels) > 10 {
+		if n := q.Levels(); n < 2 || n > 10 {
 			return fmt.Errorf("question %q is a score and needs criteria that are an array of 2 to 10 strings", q.ID)
 		}
 	case "choice":
@@ -168,11 +160,9 @@ func (q Question) Wire() map[string]any {
 	return w
 }
 
-// Levels is the number of levels of a score question, and 0 for any other.
+// Levels is the number of levels of a score question, and 0 when its criteria aren't an array of
+// strings.
 func (q Question) Levels() int {
-	if q.Type != "score" {
-		return 0
-	}
 	var levels []string
 	if json.Unmarshal(q.Criteria, &levels) != nil {
 		return 0
@@ -183,26 +173,19 @@ func (q Question) Levels() int {
 // Options are the option names of a choice question, in the order they were written. Decoding
 // into a map would lose that order, so the object is walked token by token.
 func (q Question) Options() []string {
-	if q.Type != "choice" {
-		return nil
-	}
 	dec := json.NewDecoder(bytes.NewReader(q.Criteria))
-	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+	if tok, _ := dec.Token(); tok != json.Delim('{') {
 		return nil
 	}
 	var names []string
 	for dec.More() {
-		tok, err := dec.Token()
+		name, err := dec.Token()
 		if err != nil {
 			return names
 		}
-		name, ok := tok.(string)
-		if !ok {
-			return names
-		}
-		names = append(names, name)
-		var skip json.RawMessage
-		if err := dec.Decode(&skip); err != nil && err != io.EOF {
+		names = append(names, name.(string)) // a key that decodes is a string
+		var value json.RawMessage
+		if dec.Decode(&value) != nil {
 			return names
 		}
 	}

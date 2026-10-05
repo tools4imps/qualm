@@ -4,6 +4,7 @@ package jev
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -134,11 +135,7 @@ func (c *Client) sleep(ctx context.Context, d time.Duration) {
 
 // once makes a single attempt and returns the reply body only when the status is 200.
 func (c *Client) once(ctx context.Context, httpc *http.Client, body []byte) ([]byte, int, error) {
-	endpoint := c.Endpoint
-	if endpoint == "" {
-		endpoint = Endpoint
-	}
-	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, cmp.Or(c.Endpoint, Endpoint), bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, errors.New("jev: the endpoint is not a valid URL")
 	}

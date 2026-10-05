@@ -45,18 +45,15 @@ func (c Cache) Put(key string, r Reply) error {
 	if err != nil {
 		return err
 	}
-	_, werr := tmp.Write(data)
-	cerr := tmp.Close()
-	if werr == nil {
-		werr = cerr
+	_, err = tmp.Write(data)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
 	}
-	if werr != nil {
+	if err == nil {
+		err = os.Rename(tmp.Name(), filepath.Join(c.Dir, key+".json"))
+	}
+	if err != nil {
 		os.Remove(tmp.Name())
-		return werr
 	}
-	if err := os.Rename(tmp.Name(), filepath.Join(c.Dir, key+".json")); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	return nil
+	return err
 }

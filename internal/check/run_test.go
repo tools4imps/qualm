@@ -162,8 +162,7 @@ func TestRunPassesWhenNoGateReachesItsThreshold(t *testing.T) {
 // Contract: gate/G1
 func TestRunFailsWhenTheGateIsExactlyAtItsThreshold(t *testing.T) {
 	t.Parallel()
-	r := newRepo(t, map[string]string{"a.go": numbered(5)})
-	r.write("a.go", edited(5, 3))
+	r := oneChange(t)
 	f := newFake(t, says(map[string]float64{"push_back": 0.6}))
 
 	res := mustRun(t, r.options(f))
@@ -661,8 +660,10 @@ func TestRunStopsWhenAskingAgainFails(t *testing.T) {
 	for name, reply := range cases {
 		t.Run(name, func(t *testing.T) {
 			f := newFake(t, reply)
+			o := r.options(f)
+			o.Jobs = 1 // one hunk at a time, so the count of requests is exact
 
-			refused(t, r.options(f), "400")
+			refused(t, o, "400")
 
 			if f.count() != 2 {
 				t.Errorf("made %d requests, want the run to stop at the second", f.count())
@@ -696,6 +697,32 @@ func TestRunStopsBeforeAskingWhenTheRepositoryOrTheConfigIsWrong(t *testing.T) {
 
 			if f.count() != 0 {
 				t.Errorf("made %d requests, want none", f.count())
+			}
+		})
+	}
+}
+
+// Contract: gate/G9
+func TestRunSaysAMistakeInTheConfigIsInQualmJSON(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"a key qualm doesn't know":              `{"modle": "x"}`,
+		"a drop of a question that isn't there": `{"drop": ["nope"]}`,
+		"a gate on a question that isn't there": `{"gate": {"question": "nope"}}`,
+		"a question with no instructions":       `{"questions": [{"id": "mine", "type": "noul"}]}`,
+		"no question left to gate":              `{"drop": ["push_back"]}`,
+	}
+	// Shared: the config is read from the working tree, so each case writes its own in turn.
+	r := oneChange(t)
+	f := newFake(t, nil)
+	for name, config := range cases {
+		t.Run(name, func(t *testing.T) {
+			r.write("qualm.json", config)
+
+			_, err := Run(context.Background(), r.options(f))
+
+			if err == nil || !strings.HasPrefix(err.Error(), "qualm.json: ") || strings.Count(err.Error(), "qualm.json") != 1 {
+				t.Errorf("err = %v, want one that starts with the file's name, said once", err)
 			}
 		})
 	}

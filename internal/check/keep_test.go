@@ -102,8 +102,7 @@ func TestKeepReplacesAnEarlierKeepDropsStaleOnesAndLeavesTheRestOfTheConfig(t *t
 // Contract: gate/G6
 func TestKeepDatesAKeepTodayWhenNoClockIsGiven(t *testing.T) {
 	t.Parallel()
-	r := newRepo(t, map[string]string{"a.go": numbered(5)})
-	r.write("a.go", edited(5, 3))
+	r := oneChange(t)
 	before := time.Now().Format("2006-01-02")
 
 	got, err := Keep(Options{Dir: r.dir}, []string{"a.go"}, "fine")
@@ -118,8 +117,7 @@ func TestKeepDatesAKeepTodayWhenNoClockIsGiven(t *testing.T) {
 // Contract: gate/G6
 func TestRunHonoursAKeepThatKeepRecorded(t *testing.T) {
 	t.Parallel()
-	r := newRepo(t, map[string]string{"a.go": numbered(5)})
-	r.write("a.go", edited(5, 3))
+	r := oneChange(t)
 	f := newFake(t, says(map[string]float64{"push_back": 0.95}))
 	o := r.options(f)
 	if res := mustRun(t, o); res.Passed() {

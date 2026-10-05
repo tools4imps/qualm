@@ -9,13 +9,36 @@ import (
 	"testing"
 )
 
-// git runs git in dir and returns its trimmed output. The environment is scrubbed of the
-// developer's own git configuration so a test never reads it.
+// TestMain cuts the tests off from the developer's git configuration and home. The code under
+// test runs git itself, so scrubbing the environment of the test's own git commands would not be
+// enough.
+func TestMain(m *testing.M) {
+	home, err := os.MkdirTemp("", "qualm-gitdiff-")
+	if err != nil {
+		panic(err)
+	}
+	for name, value := range map[string]string{
+		"HOME":              home,
+		"XDG_CONFIG_HOME":   filepath.Join(home, "config"),
+		"GIT_CONFIG_GLOBAL": os.DevNull,
+		"GIT_CONFIG_SYSTEM": os.DevNull,
+	} {
+		os.Setenv(name, value)
+	}
+	// A test run from a git hook inherits these, and they would point every git command at the
+	// hook's repository.
+	for _, name := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"} {
+		os.Unsetenv(name)
+	}
+	code := m.Run()
+	os.RemoveAll(home)
+	os.Exit(code)
+}
+
+// git runs git in dir and returns its trimmed output.
 func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
-	out, err := cmd.CombinedOutput()
+	out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
@@ -437,10 +460,9 @@ func TestSameChangeGivesSameDiffHoweverItIsHeld(t *testing.T) {
 
 // Contract: diff/D8
 func TestBinaryFilesAreMarkedAndHaveNoDiff(t *testing.T) {
-	dir, base := branchRepo(t)
+	dir, _ := branchRepo(t)
 	write(t, dir, "img.png", "\x89PNG\x00\x01\x02old")
-	commit(t, dir, "add binary")
-	base = git(t, dir, "rev-parse", "HEAD")
+	base := commit(t, dir, "add binary")
 	write(t, dir, "img.png", "\x89PNG\x00\x01\x02new!")
 	write(t, dir, "fresh.bin", "\x00\x00\x00\x01")
 	write(t, dir, "text.go", "package t\n")

@@ -3,7 +3,9 @@ package check
 import (
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/tools4imps/qualm/internal/gitdiff"
 )
@@ -72,6 +74,38 @@ func TestRunAsksEachFiredDiagnosisHunkByHunkAndReportsTheStrongest(t *testing.T)
 	}
 	if got := file(t, again, "a.go").Where; !reflect.DeepEqual(got, want) {
 		t.Errorf("the replayed where = %v, want %v", got, want)
+	}
+}
+
+// Contract: judge/U6
+func TestRunAsksAtMostJobsHunksAtOnceAcrossFailingFiles(t *testing.T) {
+	t.Parallel()
+	r := newRepo(t, map[string]string{"a.go": numbered(100), "b.go": numbered(100)})
+	r.write("a.go", edited(100, 20, 80))
+	r.write("b.go", edited(100, 20, 80))
+	f := newFake(t, nil)
+	var wholes atomic.Int32
+	f.say(func(c call) answer {
+		if !whole(c) {
+			return answer{}
+		}
+		// Both files are past the hold once the second is answered, so only the hunks that follow
+		// wait for company.
+		if wholes.Add(1) == 2 {
+			f.holdUntil(3, 20*time.Millisecond)
+		}
+		return answer{values: map[string]float64{"push_back": 0.9, "added_copies": 0.9}}
+	})
+	o := r.options(f)
+	o.Jobs = 3
+
+	mustRun(t, o)
+
+	if got := f.peakInFlight(); got != 3 {
+		t.Errorf("%d requests for hunks were in flight at once, want 3: never more than Jobs, and the hunks of two files not one file at a time", got)
+	}
+	if f.count() != 6 {
+		t.Errorf("made %d requests, want 2 for the files and 4 for their hunks", f.count())
 	}
 }
 

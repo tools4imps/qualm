@@ -5,60 +5,24 @@ import (
 	"io"
 
 	"github.com/tools4imps/qualm/internal/check"
-	"github.com/tools4imps/qualm/internal/jev"
+	"github.com/tools4imps/qualm/internal/config"
 )
 
-type jsonReport struct {
-	Passed     bool       `json:"passed"`
-	Base       string     `json:"base"`
-	DryRun     bool       `json:"dry_run"`
-	Files      []jsonFile `json:"files"`
-	StaleKeeps []jsonKeep `json:"stale_keeps"`
-	Usage      jsonUsage  `json:"usage"`
-}
-
-type jsonFile struct {
-	Path    string                `json:"path"`
-	Status  string                `json:"status"`
-	Reason  string                `json:"reason,omitempty"`
-	Bytes   int                   `json:"bytes,omitempty"`
-	Answers map[string]jev.Answer `json:"answers,omitempty"`
-	Failed  []string              `json:"failed,omitempty"`
-	Where   map[string][2]int     `json:"where,omitempty"`
-}
-
-type jsonKeep struct {
-	Path   string `json:"path"`
-	Change string `json:"change"`
-	Reason string `json:"reason"`
-	Date   string `json:"date"`
-}
-
-type jsonUsage struct {
-	Requests    int     `json:"requests"`
-	InputTokens int     `json:"input_tokens"`
-	Cost        float64 `json:"cost"`
-}
-
-// JSON writes the same result as one JSON object.
+// JSON writes the same result as one JSON object. The result's own tags give the object its
+// shape, and the report adds whether the run passed.
 func JSON(w io.Writer, r check.Result) error {
-	// Slices start non-nil so an empty list is written as [] and not null.
-	out := jsonReport{
-		Passed:     r.Passed(),
-		Base:       r.Base,
-		DryRun:     r.DryRun,
-		Files:      make([]jsonFile, 0, len(r.Files)),
-		StaleKeeps: make([]jsonKeep, 0, len(r.StaleKeeps)),
-		Usage:      jsonUsage{r.Usage.Requests, r.Usage.InputTokens, r.Usage.Cost},
+	// An empty list is written as [] and not null.
+	if r.Files == nil {
+		r.Files = []check.File{}
 	}
-	for _, f := range r.Files {
-		out.Files = append(out.Files, jsonFile(f))
-	}
-	for _, k := range r.StaleKeeps {
-		out.StaleKeeps = append(out.StaleKeeps, jsonKeep(k))
+	if r.StaleKeeps == nil {
+		r.StaleKeeps = []config.Keep{}
 	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
-	return enc.Encode(out)
+	return enc.Encode(struct {
+		Passed bool `json:"passed"`
+		check.Result
+	}{r.Passed(), r})
 }

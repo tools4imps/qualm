@@ -143,13 +143,13 @@ func (s *settings) validate() error {
 	case s.format != "text" && s.format != "json":
 		return fmt.Errorf("unknown format %q, want text or json", s.format)
 	case s.given["threshold"] && (s.threshold <= 0 || s.threshold > 1):
-		return fmt.Errorf("--threshold must be above 0 and at most 1")
+		return errors.New("--threshold must be above 0 and at most 1")
 	case s.given["jobs"] && s.jobs < 1:
-		return fmt.Errorf("--jobs must be at least 1")
+		return errors.New("--jobs must be at least 1")
 	case s.given["budget"] && s.budget <= 0:
-		return fmt.Errorf("--budget must be above 0")
+		return errors.New("--budget must be above 0")
 	case s.given["reason"] && !s.isKeep():
-		return fmt.Errorf("--reason belongs to the keep command")
+		return errors.New("--reason belongs to the keep command")
 	}
 	if s.isKeep() {
 		if len(s.positional) < 2 {
@@ -192,11 +192,10 @@ func (s *settings) check(env Env, opts check.Options) int {
 }
 
 func (s *settings) keep(env Env, opts check.Options) int {
-	paths := opts.Paths
-	if _, err := check.Keep(opts, paths, s.reason); err != nil {
+	if _, err := check.Keep(opts, opts.Paths, s.reason); err != nil {
 		return fail(env, err)
 	}
-	for _, p := range paths {
+	for _, p := range opts.Paths {
 		fmt.Fprintf(env.Stdout, "qualm: kept %s\n", p)
 	}
 	return 0

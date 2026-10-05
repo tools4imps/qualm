@@ -4,10 +4,11 @@ package gitdiff
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"os/exec"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -36,12 +37,8 @@ func run(dir string, stdin string, okExit []int, args ...string) (string, error)
 	}
 	if err := cmd.Run(); err != nil {
 		var ee *exec.ExitError
-		if errors.As(err, &ee) {
-			for _, c := range okExit {
-				if ee.ExitCode() == c {
-					return out.String(), nil
-				}
-			}
+		if errors.As(err, &ee) && slices.Contains(okExit, ee.ExitCode()) {
+			return out.String(), nil
 		}
 		msg := strings.TrimSpace(errb.String())
 		if msg == "" {
@@ -97,10 +94,9 @@ func Base(dir, ref string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// tracked is a path git already knows, with the path it came from when it was renamed.
-type tracked struct {
-	path, old, status string
-}
+// statuses names the kinds of change that are listed, by the letter git gives them. A change of
+// type, such as a file that became a symlink, counts as modified.
+var statuses = map[byte]string{'A': "added", 'M': "modified", 'T': "modified", 'R': "renamed"}
 
 // Changes lists the added, modified, renamed and untracked files between base and the working
 // tree of dir, narrowed to paths when any are given, sorted by path.
@@ -108,63 +104,42 @@ func Changes(dir, base string, paths []string) ([]Change, error) {
 	spec := append([]string{"--"}, paths...)
 
 	// --relative keeps names relative to dir, which is how the path arguments are read too.
-	out, err := run(dir, "", nil, append([]string{"diff", "--relative", "--name-status", "-M", "-z", base}, spec...)...)
+	listed, err := run(dir, "", nil, append([]string{"diff", "--relative", "--name-status", "-M", "-z", base}, spec...)...)
 	if err != nil {
 		return nil, err
 	}
-	var files []tracked
-	toks := strings.Split(out, "\x00")
-	for i := 0; i < len(toks) && toks[i] != ""; i++ {
-		code := toks[i][0]
-		switch code {
-		case 'R', 'C':
-			if i+2 >= len(toks) {
-				return nil, errors.New("git diff: malformed name-status output")
-			}
-			t := tracked{path: toks[i+2], old: toks[i+1], status: "added"}
-			if code == 'R' {
-				t.status = "renamed"
-			}
-			files = append(files, t)
-			i += 2
-		default:
-			if i+1 >= len(toks) {
-				return nil, errors.New("git diff: malformed name-status output")
-			}
-			switch code {
-			case 'A':
-				files = append(files, tracked{path: toks[i+1], status: "added"})
-			case 'M', 'T':
-				files = append(files, tracked{path: toks[i+1], status: "modified"})
-			}
-			i++
-		}
-	}
-
-	out, err = run(dir, "", nil, append([]string{"ls-files", "--others", "--exclude-standard", "-z"}, spec...)...)
-	if err != nil {
-		return nil, err
-	}
-	var untracked []string
-	for _, p := range strings.Split(out, "\x00") {
-		if p != "" {
-			untracked = append(untracked, p)
-		}
-	}
-
 	var changes []Change
-	for _, f := range files {
-		args := []string{"diff", "--relative", "-U8", "-M", base, "--"}
-		if f.old != "" && f.status == "renamed" {
-			args = append(args, f.old)
+	toks := strings.Split(listed, "\x00")
+	for i := 0; i < len(toks) && toks[i] != ""; {
+		// A rename lists the old path and then the new one. -M finds renames and never copies, so
+		// every other entry has one path.
+		code, n := toks[i][0], 1
+		if code == 'R' {
+			n = 2
 		}
-		raw, err := run(dir, "", nil, append(args, f.path)...)
-		if err != nil {
-			return nil, err
+		if i+n >= len(toks) {
+			return nil, errors.New("git diff: malformed name-status output")
 		}
-		changes = append(changes, build(f.path, f.status, raw))
+		if status, ok := statuses[code]; ok {
+			// A rename is asked for by both paths, so that git pairs them again.
+			raw, err := run(dir, "", nil, append([]string{"diff", "--relative", "-U8", "-M", base, "--"}, toks[i+1:i+1+n]...)...)
+			if err != nil {
+				return nil, err
+			}
+			changes = append(changes, build(toks[i+n], status, raw))
+		}
+		i += 1 + n
 	}
-	for _, p := range untracked {
+
+	untracked, err := run(dir, "", nil, append([]string{"ls-files", "--others", "--exclude-standard", "-z"}, spec...)...)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, p := range strings.Split(untracked, "\x00") {
+		if p == "" {
+			continue
+		}
 		// --no-index exits 1 when the files differ, which is the case we are asking about.
 		raw, err := run(dir, "", []int{1}, "diff", "--no-index", "-U8", "--", "/dev/null", p)
 		if err != nil {
@@ -173,7 +148,7 @@ func Changes(dir, base string, paths []string) ([]Change, error) {
 		changes = append(changes, build(p, "added", raw))
 	}
 
-	sort.Slice(changes, func(i, j int) bool { return changes[i].Path < changes[j].Path })
+	slices.SortFunc(changes, func(a, b Change) int { return cmp.Compare(a.Path, b.Path) })
 	if err := mark(dir, changes); err != nil {
 		return nil, err
 	}

@@ -57,22 +57,28 @@ Jev's answers move a little between identical calls, by 0.03 at most in our test
 A passing run prints one line. A failing run names each file, the answers that matter, and where to look:
 
 ```text
-qualm: 1 of 7 changed files drew a qualm.
+qualm: 1 of 9 changed files drew a qualm.
 
-lib/mutineer/coverage_map.rb          push back 0.61
+lib/mutineer/coverage_map.rb  push back 0.64
   harder 0.99
-  grew a big unit 0.84    lines 412-540
-  added copies 0.75       lines 598-655
+  grew a big unit 0.85           lines 327-577
+  added copies 0.76              lines 327-577
+  added impossible guards 0.66   lines 327-577
+  added unused flexibility 0.50  lines 327-577
 
 What to do
-  A reviewer would likely ask for these changes to be simplified before they merge.
+  A reviewer would likely ask for this change to be simplified before it merges.
   The questions that fired:
     grew_a_big_unit: Did the change make an already long function or class longer, where the new work could have gone in a unit of its own?
     added_copies: Did the change add logic that is a near-copy of logic already in the file?
+    added_impossible_guards: Did the change add checks or fallbacks for states the surrounding code shows can't happen?
+    added_unused_flexibility: Did the change add options, hooks or indirection that the file uses in only one place?
   Rework the change so they no longer apply, then run qualm again.
   A qualm is an opinion. If the change is right as it stands, a person can keep it:
     qualm keep lib/mutineer/coverage_map.rb --reason "..."
 ```
+
+That is a real run, on the commit of [mutineer](https://github.com/davidteren/mutineer) that added 22 methods to one class. It took under four seconds and cost a fraction of a cent.
 
 The line ranges come from a second pass. On a failing file, qualm asks each diagnosis again hunk by hunk and reports the hunk where it is strongest.
 
@@ -114,7 +120,7 @@ Nothing stops an agent from keeping its own change. The safeguard is that a keep
 - `gate` changes the gate's question or its threshold.
 - `questions` adds your own. One with a built-in's id replaces it, and one with `gates` and a `threshold` can fail the run too.
 - `drop` removes built-in questions.
-- `skip` adds paths to leave alone. A pattern with no slash matches a file name anywhere, and `**` matches any number of directories.
+- `skip` adds paths to leave alone. A pattern with no slash matches a file name anywhere, `**` matches any number of directories, and a pattern ending in a slash matches everything under that directory.
 
 A question's `type` is `noul` for yes or no, `score` for ordered levels listed in `criteria`, or `choice` for named options. An unknown key or a threshold outside 0 to 1 stops the run with exit 2, so a typo never passes for a clean run.
 
@@ -172,13 +178,14 @@ That is the whole of the evidence. It is one codebase in one language, and nobod
 
 ## How qualm holds itself to this
 
-qualm has its own Contract in `contract/`: 75 numbered obligations across nine primitives (skip, diff, questions, config, jev, judge, gate, report and cli). Every obligation has at least one test that names it with a `// Contract: <primitive>/<id>` comment. A test in `internal/contractcheck` publishes contract coverage and fails while any obligation lacks a test.
+qualm has its own Contract in `contract/`: 76 numbered obligations across nine primitives (skip, diff, questions, config, jev, judge, gate, report and cli). Every obligation has at least one test that names it with a `// Contract: <primitive>/<id>` comment. A test in `internal/contractcheck` publishes contract coverage and fails while any obligation lacks a test.
 
 ## Known limits in 0.1
 
 - It talks to Jev through OpenRouter only.
 - It judges one file at a time, so it can't see that a change copied logic from another file. exhale catches that for Ruby.
 - The threshold rests on one codebase's history.
+- A failing file is asked about again hunk by hunk to find where each diagnosis points, which costs one more request per hunk.
 - There is no survey mode for scoring a whole codebase yet.
 
 ## License

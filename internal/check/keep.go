@@ -1,12 +1,14 @@
 package check
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -42,7 +44,7 @@ func Keep(o Options, paths []string, reason string) ([]config.Keep, error) {
 	if err := addKeeps(keeps, changes, paths, reason, today(o.Now)); err != nil {
 		return nil, err
 	}
-	cfg.Keeps = sortedByPath(keeps)
+	cfg.Keeps = slices.SortedFunc(maps.Values(keeps), func(a, b config.Keep) int { return cmp.Compare(a.Path, b.Path) })
 	if err := cfg.Save(o.Dir); err != nil {
 		return nil, err
 	}
@@ -64,15 +66,6 @@ func addKeeps(keeps map[string]config.Keep, changes []gitdiff.Change, paths []st
 		keeps[c.Path] = config.Keep{Path: c.Path, Change: ChangeHash(c.Diff), Reason: reason, Date: date}
 	}
 	return nil
-}
-
-func sortedByPath(keeps map[string]config.Keep) []config.Keep {
-	out := make([]config.Keep, 0, len(keeps))
-	for _, k := range keeps {
-		out = append(out, k)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out
 }
 
 // today is the date a keep made now carries.
@@ -97,12 +90,7 @@ func binds(k config.Keep, c gitdiff.Change) bool {
 
 // bound reports whether a keep binds to any of the changes. One that doesn't is stale.
 func bound(k config.Keep, changes []gitdiff.Change) bool {
-	for _, c := range changes {
-		if binds(k, c) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(changes, func(c gitdiff.Change) bool { return binds(k, c) })
 }
 
 // stale lists the keeps that bind to none of the changes, in the order they were given.

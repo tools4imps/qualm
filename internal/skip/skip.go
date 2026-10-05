@@ -37,18 +37,15 @@ func (r Rules) Reason(path string) string {
 	if len(segments) == 0 {
 		return ""
 	}
-	for _, dir := range segments[:len(segments)-1] {
-		if slices.Contains(builtDirs, dir) {
-			return "vendored or built"
-		}
-	}
-	if matchesAny(generatedNames, segments[len(segments)-1]) {
+	dirs, name := segments[:len(segments)-1], segments[len(segments)-1]
+	switch {
+	case under(dirs, builtDirs):
+		return "vendored or built"
+	case matchesAny(generatedNames, name):
 		return "lockfile or generated"
-	}
-	if matchesAny(proseNames, segments[len(segments)-1]) {
+	case matchesAny(proseNames, name):
 		return "prose or data"
-	}
-	if !r.IncludeTests && isTest(segments) {
+	case !r.IncludeTests && (under(dirs, testDirs) || matchesAny(testNames, name)):
 		return "test"
 	}
 	for _, pattern := range r.Extra {
@@ -64,7 +61,7 @@ func (r Rules) Reason(path string) string {
 // "?" match inside one path segment.
 func Match(pattern, path string) bool {
 	segments := split(path)
-	if len(segments) == 0 || pattern == "" {
+	if len(segments) == 0 {
 		return false
 	}
 	if !strings.Contains(pattern, "/") {
@@ -102,34 +99,17 @@ func matchSegment(pattern, name string) bool {
 	return err == nil && ok
 }
 
-// isTest matches test directories at any depth and test file names.
-func isTest(segments []string) bool {
-	last := len(segments) - 1
-	for _, dir := range segments[:last] {
-		if slices.Contains(testDirs, dir) {
-			return true
-		}
-	}
-	return matchesAny(testNames, segments[last])
+// under reports whether any of a path's directories, at any depth, has one of the names.
+func under(dirs, names []string) bool {
+	return slices.ContainsFunc(dirs, func(dir string) bool { return slices.Contains(names, dir) })
 }
 
 // matchesAny tests a file name against a list of globs.
 func matchesAny(globs []string, name string) bool {
-	for _, g := range globs {
-		if matchSegment(g, name) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(globs, func(glob string) bool { return matchSegment(glob, name) })
 }
 
 // split cleans a path into segments. Git prints paths without a leading "./", but callers may not.
 func split(path string) []string {
-	var out []string
-	for _, s := range strings.Split(path, "/") {
-		if s != "" && s != "." {
-			out = append(out, s)
-		}
-	}
-	return out
+	return slices.DeleteFunc(strings.Split(path, "/"), func(s string) bool { return s == "" || s == "." })
 }
