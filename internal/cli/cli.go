@@ -19,9 +19,6 @@ import (
 	"github.com/tools4imps/qualm/internal/report"
 )
 
-// Version is the release this source builds.
-const Version = "0.1.0"
-
 // Env is the world outside the program, passed in so tests can stand in for it.
 type Env struct {
 	Dir      string

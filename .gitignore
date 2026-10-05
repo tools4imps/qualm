@@ -11,3 +11,6 @@
 /spike/results.json
 /spike/history*.json
 /spike/compare*.json
+
+# Release artefacts built by rake
+/pkg/

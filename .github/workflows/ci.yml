@@ -35,6 +35,32 @@ jobs:
       - name: Contract coverage
         run: go test -v -run TestEveryObligationIsNamedByATest ./internal/contractcheck/ | grep 'contract coverage'
 
+  # The release builds a gem per platform around the Go binary. Building them here means a broken
+  # gemspec or a lost executable bit fails a pull request, not a release.
+  gem:
+    name: The gem builds and runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: .ruby-version
+
+      - name: Build the gems and the archives
+        run: rake release:build
+
+      - name: The built gem installs and runs
+        run: |
+          version=$(rake release:version)
+          export GEM_HOME="$(mktemp -d)"
+          gem install --local --no-document "pkg/qualm-$version-x86_64-linux.gem"
+          test "$("$GEM_HOME/bin/qualm" --version)" = "qualm $version"
+
   # qualm holds itself to its own gate. This needs a key, so it only runs where
   # the repository's secret is available, which leaves out pull requests from forks.
   self:

@@ -1,0 +1,7 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Hands the command line to the Go binary this gem carries.
+require "qualm"
+
+exec(Qualm.binary, *ARGV)
