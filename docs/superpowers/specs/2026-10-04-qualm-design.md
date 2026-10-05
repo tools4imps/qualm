@@ -140,7 +140,7 @@ Skipped by default, before any request:
 - binary files
 - tests, unless `--include-tests`: `*_test.go`, `*_test.rb`, `*_spec.rb`, `*.test.*`, `*.spec.*`, `test_*.py`, and paths under `test/`, `tests/`, `spec/`, `__tests__/`
 
-`skip` in the config adds patterns. A pattern with no slash matches the file name anywhere. `**` matches any number of directories.
+`skip` in the config adds patterns. A pattern with no slash matches the file name anywhere. `**` matches any number of directories. A pattern ending in a slash matches everything under that directory.
 
 ## The report
 
@@ -160,14 +160,14 @@ What to do
     grew_a_big_unit: Did the change make an already long function or class longer, where the new work could have gone in a unit of its own?
     added_copies: Did the change add logic that is a near-copy of logic already in the file?
   Rework the change so they no longer apply, then run qualm again.
-  A qualm is an opinion. If the change is right as it stands, a person can keep it:
+  A qualm is an opinion. If the change is right as it stands, a person can keep it from the top of the repository:
     qualm keep lib/mutineer/coverage_map.rb --reason "..."
 ```
 
 - A passing run prints one line: `qualm: 7 changed files, no qualms.` Kept files and stale keeps are listed under it when there are any.
 - With nothing to judge it prints `qualm: nothing to judge.` and exits 0.
 - A failing file shows its gate value, the direction when it isn't "same", and each diagnosis at 0.5 or above with its line range.
-- `--format json` prints one object: `{ "passed", "base", "threshold", "files": [ { "path", "status", "answers", "failed", "where" } ], "kept", "stale_keeps", "usage": { "requests", "input_tokens", "cost" } }`. `status` is `judged`, `kept` or `skipped`.
+- `--format json` prints one object: `{ "passed", "dry_run", "base", "files": [ { "path", "status", "reason", "bytes", "answers", "failed", "where" } ], "stale_keeps", "usage": { "requests", "input_tokens", "cost" } }`. `status` is `judged`, `kept` or `skipped`, and a kept file carries its reason.
 
 ## The cache
 
@@ -175,7 +175,7 @@ Each settled answer set is stored as `<key>.json` in the user cache directory un
 
 ## Money
 
-`--budget DOLLARS`, default 1.00. qualm adds up `usage.cost` from each reply, falling back to input tokens at $0.042 per million when the reply carries no cost. When the next request could exceed the budget it stops and exits 2, naming what was spent. Replayed answers cost nothing.
+`--budget DOLLARS`, default 1.00. qualm adds up `usage.cost` from each reply, falling back to input tokens at $0.042 per million when the reply carries no cost. Once the spend reaches the budget it makes no further request and exits 2, naming what was spent. Replayed answers cost nothing.
 
 ## Failure
 
@@ -220,3 +220,22 @@ Each package has one job and talks to the others through plain values. `internal
 A public repository at `github.com/tools4imps/qualm`, MIT licence. CI runs the tests, the Contract check and `go vet` on every push and pull request. A tag builds binaries for macOS, Linux and Windows with GoReleaser and attaches them to a GitHub release. `go install github.com/tools4imps/qualm/cmd/qualm@latest` works from the first tag.
 
 qualm sends diffs to OpenRouter and on to TypeSafe. The README says so plainly.
+
+## Changes after the independent review
+
+A reviewer who hadn't seen the code said not to ship, and these are the fixes. Where this section and the text above disagree, this section and the Contract are right.
+
+- **Git's output is pinned.** Every diff call passes fixed options for colour, external diff tools, text conversion, the algorithm, the prefixes and the context, and empties `GIT_DIFF_OPTS`. A user's settings used to be able to make every file read as having no content, and the run exited 0.
+- **An unreadable diff is an error.** Only a mode-only change, a pure rename or a new empty file has no content to judge. A new file counts as empty when git gives it the id of an empty file, so a sparse checkout that leaves the file out of the working tree reads the same.
+- **File names are never read as patterns.** Every git call passes `--literal-pathspecs`.
+- **Git's header lines are dropped wherever they appear** in a diff, which matters when a file changes type.
+- **Listing reads no diff.** Names come first, the skip rules and git attributes are applied, and a diff is read only for a file that isn't skipped.
+- **Path arguments narrow the list after renames are paired.** One that exists neither in the working tree nor in the base is an error.
+- **A keep binds to the lines the change adds and removes**, and no longer to line numbers or context. A change elsewhere in the file on the base branch leaves it standing.
+- **The cache key also covers the gate thresholds**, and a cached entry is used only when it answers every question asked.
+- **The text report counts skipped files by reason** on its second line, escapes control characters in paths and reasons, and quotes paths in the suggested `qualm keep` command in the one form sh, bash and zsh all read. A path that starts with a dash gets `./` in front. When a path holds anything but printable ASCII the command prints `PATH...` and leaves the paths to the reader, since bash under an encoding such as Shift JIS misreads a quoted UTF-8 name. The advice says to run the command from the top of the repository, which is where the report's paths start.
+- **Warnings.** An error while finding where the diagnoses point no longer discards the verdict. It is reported as a warning, and so is a cache that can't be written.
+- **A hunk over the piece limit is asked in pieces** in the where pass too.
+- **Questions.** A question named as the gate keeps its own threshold unless the gate setting gives one. A role must be one of the three or left out. A choice question is never a diagnosis, and its answer prints with its name unless it describes the change.
+- **The command line.** A number that isn't finite is refused. With `keep`, only `--base` and `--reason` apply.
+- **Money.** A reply with no usage is priced from the size of the request, and a timeout says it timed out.
