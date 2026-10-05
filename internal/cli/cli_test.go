@@ -277,6 +277,24 @@ func TestBadFlagsExitTwoWithUsage(t *testing.T) {
 	}
 }
 
+// Contract: cli/L3
+func TestFlagsAtTheirLimitsAreAccepted(t *testing.T) {
+	cases := map[string][]string{
+		"threshold one": {"--threshold", "1"},
+		"jobs one":      {"--jobs", "1"},
+		"tiny budget":   {"--budget", "0.000001"},
+		"format json":   {"--format", "json"},
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			w := newWorld(t, 0.2)
+			if o := w.run(t, args...); o.code != 0 {
+				t.Fatalf("%+v", o)
+			}
+		})
+	}
+}
+
 // Contract: cli/L4
 func TestUnknownBaseExitsTwo(t *testing.T) {
 	w := newWorld(t, 0.2)

@@ -532,3 +532,64 @@ func TestRootOutsideARepositoryIsAnError(t *testing.T) {
 		t.Errorf("error %q should say it is not a git repository", err)
 	}
 }
+
+// fakeGit puts a git on the path that prints what the test says, so that output real git never
+// produces can be read.
+func fakeGit(t *testing.T, names, attrs string) {
+	t.Helper()
+	dir := t.TempDir()
+	script := `#!/bin/sh
+case "$*" in
+*--name-status*) printf "$FAKE_NAMES" ;;
+*check-attr*) cat >/dev/null; printf "$FAKE_ATTRS" ;;
+*ls-files*) ;;
+*-U8*) printf -- '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n' ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_NAMES", names)
+	t.Setenv("FAKE_ATTRS", attrs)
+}
+
+// Contract: diff/D4
+func TestChangesReadOutputWithNoTrailingSeparator(t *testing.T) {
+	fakeGit(t, `M\0x`, `x\0`)
+	got, err := Changes(t.TempDir(), "base", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(paths(got), []string{"x"}) || got[0].Marked {
+		t.Errorf("changes = %+v", got)
+	}
+}
+
+// Contract: diff/D4
+func TestChangesRejectAStatusWithNoPath(t *testing.T) {
+	fakeGit(t, `M`, ``)
+	_, err := Changes(t.TempDir(), "base", nil)
+	if err == nil || !strings.Contains(err.Error(), "malformed") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+// Contract: diff/D12
+func TestGitFailureCarriesItsMessageOrItsExitStatus(t *testing.T) {
+	dir := newRepo(t)
+	_, err := run(dir, "", nil, "rev-parse", "--verify", "nosuchref")
+	if err == nil || !strings.HasPrefix(err.Error(), "git rev-parse: fatal:") {
+		t.Errorf("err = %v, want git's own message", err)
+	}
+
+	// git diff --quiet says nothing when it fails, so the exit status stands in for the message.
+	write(t, dir, "a.go", "one\n")
+	git(t, dir, "add", "a.go")
+	git(t, dir, "commit", "-q", "-m", "a")
+	write(t, dir, "a.go", "two\n")
+	_, err = run(dir, "", nil, "diff", "--quiet")
+	if err == nil || err.Error() != "git diff: exit status 1" {
+		t.Errorf("err = %v", err)
+	}
+}

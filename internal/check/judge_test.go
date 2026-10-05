@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -534,12 +535,17 @@ func TestRunSettlesOnlyTheGateThatWasClose(t *testing.T) {
 // Contract: judge/U5
 func TestRunAsksAgainOnlyWithinFiveHundredthsOfTheThreshold(t *testing.T) {
 	t.Parallel()
+	// The margin is closeMargin plus a slack for rounding. A threshold of 2^-50 and a value that
+	// sits above it by exactly that sum make the distance equal the sum with no rounding at all.
+	edge := float64(closeMargin + slack)
+	tiny := math.Ldexp(1, -50)
 	cases := []struct {
 		name      string
 		threshold float64
 		values    map[string]float64
 		want      int
 	}{
+		{"exactly the margin and its slack", tiny, map[string]float64{"push_back": edge + tiny}, 3},
 		{"far above", 0, map[string]float64{"push_back": 0.9}, 1},
 		{"just outside above", 0, map[string]float64{"push_back": 0.66}, 1},
 		{"exactly five hundredths above", 0, map[string]float64{"push_back": 0.65}, 3},

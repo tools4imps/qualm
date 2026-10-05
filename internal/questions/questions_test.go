@@ -125,6 +125,12 @@ func TestExtraQuestionReplacesInPlaceOrIsAppended(t *testing.T) {
 	if z := find(t, qs, "zeta"); z.Role != "diagnosis" {
 		t.Fatalf("zeta role = %q", z.Role)
 	}
+
+	// The first built-in can be replaced too.
+	qs = mustResolve(t, "", 0, nil, []Question{{ID: "push_back", Type: "noul", Instructions: "Mine?", Gates: true, Threshold: 0.5}})
+	if len(qs) != 10 || qs[0].ID != "push_back" || qs[0].Instructions != "Mine?" || qs[0].Threshold != 0.5 {
+		t.Fatalf("first = %+v of %d", qs[0], len(qs))
+	}
 }
 
 // Contract: questions/Q4
@@ -169,6 +175,12 @@ func TestGateQuestionAndThresholdCanChange(t *testing.T) {
 	// A question from the config can be the gate, and it can be the choice of a built-in too.
 	qs = mustResolve(t, "mine", 0, nil, []Question{{ID: "mine", Type: "score", Instructions: "?", Criteria: json.RawMessage(`["a","b"]`)}})
 	if got := gates(qs); !reflect.DeepEqual(got, []string{"mine"}) {
+		t.Fatalf("gating = %v", got)
+	}
+
+	// The gate may sit first in the list once the questions before it are dropped.
+	qs = mustResolve(t, "simplified", 0, []string{"push_back", "direction"}, nil)
+	if got := gates(qs); !reflect.DeepEqual(got, []string{"simplified"}) || qs[0].ID != "simplified" {
 		t.Fatalf("gating = %v", got)
 	}
 

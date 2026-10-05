@@ -172,6 +172,71 @@ func TestBadRepliesAreErrors(t *testing.T) {
 }
 
 // Contract: jev/J4
+func TestValuesAtTheEndsOfTheUnitIntervalAreAccepted(t *testing.T) {
+	cases := map[string]struct {
+		body string
+		want float64
+	}{
+		"noul zero":    {`{"answers":{"push_back":{"noul":0}}}`, 0},
+		"noul one":     {`{"answers":{"push_back":{"noul":1}}}`, 1},
+		"score bottom": {`{"answers":{"push_back":{"noul":0.1},"hard_to_trace":{"score":0}}}`, 0},
+		"score top":    {`{"answers":{"push_back":{"noul":0.1},"hard_to_trace":{"score":3}}}`, 1},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := &fake{statuses: []int{200}, body: tc.body}
+			c, _ := start(t, f)
+			asked := []questions.Question{qNoul}
+			id := "push_back"
+			if strings.HasPrefix(name, "score") {
+				asked = []questions.Question{qNoul, qScore}
+				id = "hard_to_trace"
+			}
+			r, err := c.Ask(context.Background(), testRequest(), asked)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := r.Answers[id].Value; got != tc.want {
+				t.Errorf("value = %v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	f := &fake{statuses: []int{200}, body: `{"answers":{"push_back":{"noul":0.1},"hard_to_trace":{"score":1},
+ "direction":{"choice":"same","probabilities":{"harder":0,"same":1,"easier":0}}}}`}
+	c, _ := start(t, f)
+	r, err := c.Ask(context.Background(), testRequest(), allQs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := r.Answers["direction"]; got.Value != 1 || got.Probabilities["harder"] != 0 {
+		t.Errorf("choice = %+v", got)
+	}
+}
+
+// Contract: jev/J4
+func TestReplySizeLimitIsExact(t *testing.T) {
+	const head = `{"answers":{"push_back":{"noul":0.1}},"pad":"`
+	const tail = `"}`
+	fill := func(total int) string {
+		return head + strings.Repeat("x", total-len(head)-len(tail)) + tail
+	}
+
+	f := &fake{statuses: []int{200}, body: fill(maxReplySize)}
+	c, _ := start(t, f)
+	if _, err := c.Ask(context.Background(), testRequest(), []questions.Question{qNoul}); err != nil {
+		t.Fatalf("a reply of exactly the limit: %v", err)
+	}
+
+	f = &fake{statuses: []int{200}, body: fill(maxReplySize + 1)}
+	c, _ = start(t, f)
+	_, err := c.Ask(context.Background(), testRequest(), []questions.Question{qNoul})
+	if err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("a reply one byte over the limit: %v", err)
+	}
+}
+
+// Contract: jev/J4
 func TestAScoreQuestionWithOneLevelIsAnError(t *testing.T) {
 	one := questions.Question{ID: "flat", Type: "score", Instructions: "x", Criteria: json.RawMessage(`["only"]`)}
 	// Whatever the score, there is no top level to divide it by.

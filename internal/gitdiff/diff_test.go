@@ -142,3 +142,43 @@ func TestSplitEmitsALineLongerThanTheLimitOnItsOwn(t *testing.T) {
 		t.Errorf("lines lost or cut: %q", pieces)
 	}
 }
+
+// Contract: diff/D6
+func TestNormaliseKeepsADiffThatStartsAtItsFirstLine(t *testing.T) {
+	if got := normalise(hdr + "@@ -1 +1 @@\n-a\n+b\n"); got != hdr+"@@ -1 +1 @@\n-a\n+b\n" {
+		t.Errorf("normalise = %q", got)
+	}
+	// A "--- " line that is the second line is found too, and what comes before it is dropped.
+	if got := normalise("\n" + hdr); got != hdr {
+		t.Errorf("normalise with a blank first line = %q", got)
+	}
+}
+
+// Contract: diff/D10
+func TestHunksOfADiffWithNoHeader(t *testing.T) {
+	header, hunks := Hunks("@@ -1 +1 @@\n-a\n+b\n")
+	if header != "" || len(hunks) != 1 || hunks[0].Text != "@@ -1 +1 @@\n-a\n+b\n" || hunks[0].Start != 1 || hunks[0].End != 1 {
+		t.Errorf("header = %q, hunks = %+v", header, hunks)
+	}
+}
+
+// Contract: diff/D11
+func TestSplitKeepsALineThatFillsThePieceExactly(t *testing.T) {
+	at := "@@ -0,0 +1,3 @@\n"
+	diff := hdr + at + "+aaaa\n+bbbb\n+cccc\n"
+	limit := len(hdr) + len(at) + 2*len("+aaaa\n") // two lines fit exactly
+	pieces := Split(diff, limit)
+	if len(pieces) != 2 || pieces[0] != hdr+at+"+aaaa\n+bbbb\n" || pieces[1] != hdr+at+"+cccc\n" {
+		t.Errorf("pieces = %q", pieces)
+	}
+}
+
+// Contract: diff/D11
+func TestSplitKeepsTheLastLineOfAHunkWithNoFinalNewline(t *testing.T) {
+	at := "@@ -0,0 +1,3 @@\n"
+	diff := hdr + at + "+aaaa\n+bbbb\n+cc"
+	pieces := Split(diff, len(hdr)+len(at)+2*len("+aaaa\n"))
+	if len(pieces) != 2 || pieces[1] != hdr+at+"+cc" {
+		t.Errorf("pieces = %q", pieces)
+	}
+}
