@@ -151,14 +151,6 @@ func (s *settings) validate() error {
 	case s.given["reason"] && !s.isKeep():
 		return errors.New("--reason belongs to the keep command")
 	}
-	if s.isKeep() {
-		if len(s.positional) < 2 {
-			return errors.New("keep needs at least one PATH")
-		}
-		if strings.TrimSpace(s.reason) == "" {
-			return errors.New("keep needs --reason TEXT")
-		}
-	}
 	return nil
 }
 
@@ -192,7 +184,7 @@ func (s *settings) check(env Env, opts check.Options) int {
 }
 
 func (s *settings) keep(env Env, opts check.Options) int {
-	if _, err := check.Keep(opts, opts.Paths, s.reason); err != nil {
+	if _, err := check.Keep(opts, s.reason); err != nil {
 		return fail(env, err)
 	}
 	for _, p := range opts.Paths {
@@ -231,7 +223,7 @@ func (s *settings) options(env Env) (check.Options, error) {
 		NoCache:      s.noCache,
 		CacheDir:     s.cache,
 		Budget:       s.budget,
-		Client:       &jev.Client{Endpoint: env.Endpoint, Key: env.Getenv("OPENROUTER_API_KEY")},
+		Client:       &jev.Client{Endpoint: env.Endpoint, Key: env.Getenv(jev.KeyVar)},
 	}, nil
 }
 

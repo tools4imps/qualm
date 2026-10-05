@@ -21,8 +21,15 @@ import (
 // Endpoint is where Jev is served.
 const Endpoint = "https://openrouter.ai/api/alpha/decisions"
 
-// PricePerMillion is what Jev charges for a million input tokens, in dollars.
-const PricePerMillion = 0.042
+// KeyVar names the environment variable that holds the API key.
+const KeyVar = "OPENROUTER_API_KEY"
+
+// pricePerMillion is what Jev charges for a million input tokens, in dollars.
+const pricePerMillion = 0.042
+
+// CostOf prices input tokens in dollars. It is the cost of a reply that reports none, and the
+// estimate for a request that is not sent.
+func CostOf(inputTokens int) float64 { return float64(inputTokens) * pricePerMillion / 1e6 }
 
 const (
 	maxAttempts  = 4
@@ -51,11 +58,13 @@ type Reply struct {
 	Cost        float64           `json:"cost"`
 }
 
+// httpClient is shared by every request, so connections are reused. The timeout is for one attempt.
+var httpClient = &http.Client{Timeout: 90 * time.Second}
+
 // Client calls Jev. The key arrives through Key so this package never reads the environment.
 type Client struct {
 	Endpoint string
 	Key      string
-	HTTP     *http.Client        // nil for a client with a 90 second timeout
 	Sleep    func(time.Duration) // nil for a sleep that ends early when ctx does
 }
 
@@ -73,15 +82,11 @@ var retryable = map[int]bool{429: true, 500: true, 502: true, 503: true, 504: tr
 // Ask sends one request and reads the answers to the questions asked.
 func (c *Client) Ask(ctx context.Context, req Request, asked []questions.Question) (Reply, error) {
 	if c.Key == "" {
-		return Reply{}, errors.New("no API key: set OPENROUTER_API_KEY")
+		return Reply{}, errors.New("no API key: set " + KeyVar)
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
 		return Reply{}, fmt.Errorf("jev: encoding the request: %w", err)
-	}
-	httpc := c.HTTP
-	if httpc == nil {
-		httpc = &http.Client{Timeout: 90 * time.Second}
 	}
 
 	var lastErr error
@@ -90,7 +95,7 @@ func (c *Client) Ask(ctx context.Context, req Request, asked []questions.Questio
 		if err := ctx.Err(); err != nil {
 			return Reply{}, fmt.Errorf("jev: %w", err)
 		}
-		raw, status, err := c.once(ctx, httpc, body)
+		raw, status, err := c.once(ctx, body)
 		switch {
 		case err != nil:
 			if ctx.Err() != nil {
@@ -134,14 +139,14 @@ func (c *Client) sleep(ctx context.Context, d time.Duration) {
 }
 
 // once makes a single attempt and returns the reply body only when the status is 200.
-func (c *Client) once(ctx context.Context, httpc *http.Client, body []byte) ([]byte, int, error) {
+func (c *Client) once(ctx context.Context, body []byte) ([]byte, int, error) {
 	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, cmp.Or(c.Endpoint, Endpoint), bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, errors.New("jev: the endpoint is not a valid URL")
 	}
 	hreq.Header.Set("Authorization", "Bearer "+c.Key)
 	hreq.Header.Set("Content-Type", "application/json")
-	resp, err := httpc.Do(hreq)
+	resp, err := httpClient.Do(hreq)
 	if err != nil {
 		// The cause of a transport error is a *url.Error that carries the URL and no headers, but
 		// only its type is kept, to be safe about what an odd endpoint could put in it.
@@ -189,7 +194,7 @@ func parseReply(data []byte, asked []questions.Question) (Reply, error) {
 	if raw.Usage.Cost != nil && *raw.Usage.Cost > 0 {
 		out.Cost = *raw.Usage.Cost
 	} else {
-		out.Cost = float64(raw.Usage.InputTokens) * PricePerMillion / 1e6
+		out.Cost = CostOf(raw.Usage.InputTokens)
 	}
 
 	for _, q := range asked {
@@ -198,25 +203,23 @@ func parseReply(data []byte, asked []questions.Question) (Reply, error) {
 			return Reply{}, fmt.Errorf("jev: the reply has no answer for question %q", q.ID)
 		}
 		switch q.Type {
-		case "noul":
+		case questions.TypeNoul:
 			if a.Noul == nil || !inUnit(*a.Noul) {
 				return Reply{}, fmt.Errorf("jev: question %q has no probability between 0 and 1", q.ID)
 			}
 			out.Answers[q.ID] = Answer{Value: *a.Noul}
-		case "score":
-			top := q.Levels() - 1
-			if top < 1 {
-				return Reply{}, fmt.Errorf("jev: question %q has fewer than two levels", q.ID)
-			}
+		case questions.TypeScore:
 			if a.Score == nil {
 				return Reply{}, fmt.Errorf("jev: question %q has no score", q.ID)
 			}
-			v := *a.Score / float64(top)
+			// With a single level the top is 0 and the division gives NaN or an infinity, which
+			// is outside 0 to 1, so that case needs no check of its own.
+			v := *a.Score / float64(q.Levels()-1)
 			if !inUnit(v) {
 				return Reply{}, fmt.Errorf("jev: the score for question %q is outside its levels", q.ID)
 			}
 			out.Answers[q.ID] = Answer{Value: v}
-		case "choice":
+		case questions.TypeChoice:
 			p, ok := a.Probabilities[a.Choice]
 			if !ok {
 				return Reply{}, fmt.Errorf("jev: question %q has a choice with no probability", q.ID)

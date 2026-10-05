@@ -182,8 +182,8 @@ func TestMatch(t *testing.T) {
 		{"*.go", "", false},
 	}
 	for _, c := range cases {
-		if got := Match(c.pattern, c.path); got != c.want {
-			t.Errorf("Match(%q, %q) = %v, want %v", c.pattern, c.path, got, c.want)
+		if got := match(c.pattern, c.path); got != c.want {
+			t.Errorf("match(%q, %q) = %v, want %v", c.pattern, c.path, got, c.want)
 		}
 	}
 }

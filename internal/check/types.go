@@ -30,7 +30,7 @@ type Options struct {
 // File is what happened to one changed file. The tags are its shape in the JSON report.
 type File struct {
 	Path    string                `json:"path"`
-	Status  string                `json:"status"`            // "judged", "kept" or "skipped"
+	Status  string                `json:"status"`            // StatusJudged, StatusKept or StatusSkipped
 	Reason  string                `json:"reason,omitempty"`  // why it was kept or skipped
 	Bytes   int                   `json:"bytes,omitempty"`   // the size of its normalised diff
 	Answers map[string]jev.Answer `json:"answers,omitempty"` // by question id
@@ -46,7 +46,7 @@ const firedAt = 0.5
 func (f File) Fired(qs []questions.Question) []questions.Question {
 	var fired []questions.Question
 	for _, q := range qs {
-		if q.Role == "diagnosis" && f.Answers[q.ID].Value >= firedAt {
+		if q.Role == questions.RoleDiagnosis && f.Answers[q.ID].Value >= firedAt {
 			fired = append(fired, q)
 		}
 	}

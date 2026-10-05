@@ -32,8 +32,8 @@ var builtDirs = []string{"vendor", "node_modules", "dist", "build", "target", "t
 // Reason says why a path is skipped, or returns "" when the path is judged.
 // The reasons are "vendored or built", "lockfile or generated", "prose or data", "test" and
 // "skip rule <pattern>".
-func (r Rules) Reason(path string) string {
-	segments := split(path)
+func (r Rules) Reason(file string) string {
+	segments := split(file)
 	if len(segments) == 0 {
 		return ""
 	}
@@ -49,18 +49,18 @@ func (r Rules) Reason(path string) string {
 		return "test"
 	}
 	for _, pattern := range r.Extra {
-		if Match(pattern, path) {
+		if match(pattern, file) {
 			return "skip rule " + pattern
 		}
 	}
 	return ""
 }
 
-// Match reports whether a pattern matches a slash-separated path. A pattern with no slash matches
+// match reports whether a pattern matches a slash-separated path. A pattern with no slash matches
 // the file name in any directory. "**" matches any number of directories, including none. "*" and
 // "?" match inside one path segment.
-func Match(pattern, path string) bool {
-	segments := split(path)
+func match(pattern, file string) bool {
+	segments := split(file)
 	if len(segments) == 0 {
 		return false
 	}
@@ -77,19 +77,19 @@ func Match(pattern, path string) bool {
 
 // matchSegments walks the pattern and path together. "**" tries every possible number of
 // directories, so it can match none.
-func matchSegments(pattern, path []string) bool {
+func matchSegments(pattern, file []string) bool {
 	if len(pattern) == 0 {
-		return len(path) == 0
+		return len(file) == 0
 	}
 	if pattern[0] == "**" {
-		for skip := 0; skip <= len(path); skip++ {
-			if matchSegments(pattern[1:], path[skip:]) {
+		for skip := 0; skip <= len(file); skip++ {
+			if matchSegments(pattern[1:], file[skip:]) {
 				return true
 			}
 		}
 		return false
 	}
-	return len(path) > 0 && matchSegment(pattern[0], path[0]) && matchSegments(pattern[1:], path[1:])
+	return len(file) > 0 && matchSegment(pattern[0], file[0]) && matchSegments(pattern[1:], file[1:])
 }
 
 // matchSegment is path.Match on one segment. A malformed pattern matches nothing rather than
@@ -110,6 +110,6 @@ func matchesAny(globs []string, name string) bool {
 }
 
 // split cleans a path into segments. Git prints paths without a leading "./", but callers may not.
-func split(path string) []string {
-	return slices.DeleteFunc(strings.Split(path, "/"), func(s string) bool { return s == "" || s == "." })
+func split(file string) []string {
+	return slices.DeleteFunc(strings.Split(file, "/"), func(s string) bool { return s == "" || s == "." })
 }

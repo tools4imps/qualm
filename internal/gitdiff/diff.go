@@ -11,10 +11,10 @@ type Hunk struct {
 	Start, End int    // the first and last line it covers in the new file
 }
 
-// Normalise drops every line before the first line that starts with "--- ". Those lines carry
+// normalise drops every line before the first line that starts with "--- ". Those lines carry
 // blob hashes and modes that differ between machines. A diff with no such line, which is what git
 // prints for a binary file or a pure rename, normalises to "".
-func Normalise(raw string) string {
+func normalise(raw string) string {
 	if i := lineStart(raw, "--- "); i >= 0 {
 		return raw[i:]
 	}

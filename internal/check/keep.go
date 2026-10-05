@@ -17,12 +17,12 @@ import (
 )
 
 // Keep records a keep for each path and returns every keep now in qualm.json.
-func Keep(o Options, paths []string, reason string) ([]config.Keep, error) {
+func Keep(o Options, reason string) ([]config.Keep, error) {
 	// The reason is what a reviewer of qualm.json reads, so a keep without one says nothing.
 	if strings.TrimSpace(reason) == "" {
 		return nil, errors.New("a keep needs a reason")
 	}
-	if len(paths) == 0 {
+	if len(o.Paths) == 0 {
 		return nil, errors.New("a keep needs at least one path")
 	}
 	cfg, err := config.Load(o.Dir)
@@ -41,7 +41,7 @@ func Keep(o Options, paths []string, reason string) ([]config.Keep, error) {
 			keeps[k.Path] = k
 		}
 	}
-	if err := addKeeps(keeps, changes, paths, reason, today(o.Now)); err != nil {
+	if err := addKeeps(keeps, changes, o.Paths, reason, today(o.Now)); err != nil {
 		return nil, err
 	}
 	cfg.Keeps = slices.SortedFunc(maps.Values(keeps), func(a, b config.Keep) int { return cmp.Compare(a.Path, b.Path) })
@@ -63,7 +63,7 @@ func addKeeps(keeps map[string]config.Keep, changes []gitdiff.Change, paths []st
 		if !ok || c.Diff == "" {
 			return fmt.Errorf("%s has no change against the base to keep", p)
 		}
-		keeps[c.Path] = config.Keep{Path: c.Path, Change: ChangeHash(c.Diff), Reason: reason, Date: date}
+		keeps[c.Path] = config.Keep{Path: c.Path, Change: changeHash(c.Diff), Reason: reason, Date: date}
 	}
 	return nil
 }
@@ -76,16 +76,16 @@ func today(now func() time.Time) string {
 	return now().Format("2006-01-02")
 }
 
-// ChangeHash is the SHA-256 of a normalised diff, in hex. It is what a keep binds to, so any
+// changeHash is the SHA-256 of a normalised diff, in hex. It is what a keep binds to, so any
 // further edit to the file makes a different hash and the file is judged again.
-func ChangeHash(diff string) string {
+func changeHash(diff string) string {
 	sum := sha256.Sum256([]byte(diff))
 	return hex.EncodeToString(sum[:])
 }
 
 // binds reports whether a keep was made for exactly this change to this file.
 func binds(k config.Keep, c gitdiff.Change) bool {
-	return k.Path == c.Path && k.Change == ChangeHash(c.Diff)
+	return k.Path == c.Path && k.Change == changeHash(c.Diff)
 }
 
 // bound reports whether a keep binds to any of the changes. One that doesn't is stale.

@@ -10,7 +10,7 @@ Judging is one file's trip to Jev and back: what is sent, how a large diff is ha
 - **U4** A gating value within 0.05 of its threshold is asked twice more without the cache. The median of the three counts, and it is what gets cached.
 - **U5** A gating value further than 0.05 from its threshold is not asked again.
 - **U6** For a failing file with several hunks, each diagnosis at 0.5 or above is asked hunk by hunk and reports the lines of the hunk where it is strongest. With one hunk, that hunk's lines are reported without a request.
-- **U7** Files are judged at most `Jobs` at a time, and the result lists them sorted by path.
+- **U7** Files are judged at most `Jobs` at a time, the hunk-by-hunk requests are held to the same bound, and the result lists the files sorted by path.
 
 ```covers
 internal/check

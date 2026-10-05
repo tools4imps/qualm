@@ -442,7 +442,7 @@ func staleRepo(t *testing.T) (r *repo, live config.Keep, stale []config.Keep) {
 	stale = []config.Keep{
 		r.keepOf("b.go", "kept b"),
 		r.keepOf("c.go", "kept c"),
-		{Path: "gone.go", Change: ChangeHash("a diff that was"), Reason: "kept gone", Date: "2026-09-01"},
+		{Path: "gone.go", Change: changeHash("a diff that was"), Reason: "kept gone", Date: "2026-09-01"},
 	}
 	r.write("b.go", edited(5, 3, 4))
 	r.write("c.go", numbered(5))
@@ -702,7 +702,7 @@ func TestRunStopsBeforeAskingWhenTheRepositoryOrTheConfigIsWrong(t *testing.T) {
 	}
 }
 
-// Contract: gate/G9
+// Contract: gate/G11
 func TestRunSaysAMistakeInTheConfigIsInQualmJSON(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{

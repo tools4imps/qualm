@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+
+	"github.com/tools4imps/qualm/internal/atomicfile"
 )
 
 // Cache stores settled replies on disk, one <key>.json file each. An empty Dir means the cache is
@@ -28,8 +30,8 @@ func (c Cache) Get(key string) (Reply, bool) {
 	return r, true
 }
 
-// Put stores r under key. The write goes to a temporary file in the same directory and is renamed
-// into place, so a reader never sees half an entry and a crash leaves no corrupt one.
+// Put stores r under key. The write is atomic, so a reader never sees half an entry and a crash
+// leaves no corrupt one.
 func (c Cache) Put(key string, r Reply) error {
 	if c.Dir == "" {
 		return errors.New("cache: no directory set")
@@ -41,19 +43,5 @@ func (c Cache) Put(key string, r Reply) error {
 	if err := os.MkdirAll(c.Dir, 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(c.Dir, key+".*.tmp")
-	if err != nil {
-		return err
-	}
-	_, err = tmp.Write(data)
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	if err == nil {
-		err = os.Rename(tmp.Name(), filepath.Join(c.Dir, key+".json"))
-	}
-	if err != nil {
-		os.Remove(tmp.Name())
-	}
-	return err
+	return atomicfile.Write(filepath.Join(c.Dir, key+".json"), data, 0o600)
 }

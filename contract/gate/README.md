@@ -14,6 +14,7 @@ The gate turns answers into a pass or a fail. It must never pass a change it cou
 - **G8** A dry run sends nothing and reports each file's diff size.
 - **G9** An error from Jev or from the budget stops the run with that error. The run reports no result.
 - **G10** With nothing to judge, the run passes.
+- **G11** A mistake in a config question or in the gate setting is reported as a mistake in `qualm.json`.
 
 ```covers
 internal/check

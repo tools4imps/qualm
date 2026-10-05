@@ -178,7 +178,7 @@ That is the whole of the evidence. It is one codebase in one language, and nobod
 
 ## How qualm holds itself to this
 
-qualm has its own Contract in `contract/`: 76 numbered obligations across nine primitives (skip, diff, questions, config, jev, judge, gate, report and cli). Every obligation has at least one test that names it with a `// Contract: <primitive>/<id>` comment. A test in `internal/contractcheck` publishes contract coverage and fails while any obligation lacks a test.
+qualm has its own Contract in `contract/`: 77 numbered obligations across nine primitives (skip, diff, questions, config, jev, judge, gate, report and cli). Every obligation has at least one test that names it with a `// Contract: <primitive>/<id>` comment. A test in `internal/contractcheck` publishes contract coverage and fails while any obligation lacks a test.
 
 ## Known limits in 0.1
 

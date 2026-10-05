@@ -379,6 +379,22 @@ func TestFlagsMayComeBeforeOrAfterPaths(t *testing.T) {
 }
 
 // Contract: cli/L10
+func TestEverythingAfterDoubleDashIsAPathEvenWhenItStartsWithADash(t *testing.T) {
+	w := newWorld(t, 0.2)
+	write(t, w.dir, "-odd.go", "package lib\n")
+
+	without := w.run(t, "--dry-run", "-odd.go")
+	with := w.run(t, "--dry-run", "--", "-odd.go")
+
+	if without.code != 2 {
+		t.Errorf("without --, -odd.go should be read as a flag: %+v", without)
+	}
+	if with.code != 0 || !strings.Contains(with.stdout, "-odd.go") || strings.Contains(with.stdout, "lib/a.go") {
+		t.Errorf("with --, want only -odd.go listed: %+v", with)
+	}
+}
+
+// Contract: cli/L10
 func TestKeepIsRecognisedOnlyAsTheFirstPath(t *testing.T) {
 	w := newWorld(t, 0.2)
 	o := w.run(t, "lib/a.go", "keep", "--reason", "x")
@@ -389,9 +405,16 @@ func TestKeepIsRecognisedOnlyAsTheFirstPath(t *testing.T) {
 
 func TestKeepNeedsPathsAndReason(t *testing.T) {
 	w := newWorld(t, 0.2)
-	for _, args := range [][]string{{"keep", "--reason", "x"}, {"keep", "lib/a.go"}} {
-		if o := w.run(t, args...); o.code != 2 || o.stdout != "" {
-			t.Errorf("%v: %+v", args, o)
+	cases := []struct {
+		args []string
+		want string // what check.Keep says
+	}{
+		{[]string{"keep", "--reason", "x"}, "qualm: a keep needs at least one path\n"},
+		{[]string{"keep", "lib/a.go"}, "qualm: a keep needs a reason\n"},
+	}
+	for _, tc := range cases {
+		if o := w.run(t, tc.args...); o.code != 2 || o.stdout != "" || o.stderr != tc.want {
+			t.Errorf("%v: %+v, want exit 2, empty stdout and stderr %q", tc.args, o, tc.want)
 		}
 	}
 }

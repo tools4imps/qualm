@@ -16,7 +16,7 @@ import (
 
 // Text writes the report a person or a coding agent reads.
 func Text(w io.Writer, r check.Result) {
-	judged := filter(r.Files, "judged")
+	judged := filter(r.Files, check.StatusJudged)
 	var failing []check.File
 	for _, f := range judged {
 		if len(f.Failed) > 0 {
@@ -148,7 +148,7 @@ func filter(files []check.File, status string) []check.File {
 
 // writeKeeps prints the Kept and Stale keeps sections, each only when it has entries.
 func writeKeeps(w io.Writer, r check.Result) {
-	if kept := filter(r.Files, "kept"); len(kept) > 0 {
+	if kept := filter(r.Files, check.StatusKept); len(kept) > 0 {
 		fmt.Fprintln(w, "\nKept")
 		for _, f := range kept {
 			fmt.Fprintf(w, "  %s: %s\n", f.Path, f.Reason)
@@ -184,6 +184,5 @@ func writeDryRun(w io.Writer, judged []check.File) {
 	if len(judged) == 1 {
 		noun = "file"
 	}
-	cost := float64(total) * jev.PricePerMillion / 1e6
-	fmt.Fprintf(w, "\n%d %s, about %d tokens, about $%.4f.\n", len(judged), noun, total, cost)
+	fmt.Fprintf(w, "\n%d %s, about %d tokens, about $%.4f.\n", len(judged), noun, total, jev.CostOf(total))
 }

@@ -13,11 +13,11 @@ import (
 	"github.com/tools4imps/qualm/internal/skip"
 )
 
-// The statuses a File can have.
+// The statuses a File can have, as the JSON report spells them.
 const (
-	statusJudged  = "judged"
-	statusKept    = "kept"
-	statusSkipped = "skipped"
+	StatusJudged  = "judged"
+	StatusKept    = "kept"
+	StatusSkipped = "skipped"
 )
 
 // Run does the check and returns what happened.
@@ -96,14 +96,14 @@ func classify(changes []gitdiff.Change, rules skip.Rules, keeps []config.Keep) [
 // statusOf decides whether a change is skipped, kept or judged, and why when it isn't judged.
 func statusOf(c gitdiff.Change, rules skip.Rules, keeps []config.Keep) (status, reason string) {
 	if why := skipReason(c, rules); why != "" {
-		return statusSkipped, why
+		return StatusSkipped, why
 	}
 	for _, k := range keeps {
 		if binds(k, c) {
-			return statusKept, k.Reason
+			return StatusKept, k.Reason
 		}
 	}
-	return statusJudged, ""
+	return StatusJudged, ""
 }
 
 // skipReason says why a change is not worth a request, or returns "" when it is. The path is
@@ -126,7 +126,7 @@ func skipReason(c gitdiff.Change, rules skip.Rules) string {
 // anyJudged reports whether any file is bound for Jev. A run with none needs no client, no cache
 // and no key, so a change to prose alone passes anywhere.
 func anyJudged(files []File) bool {
-	return slices.ContainsFunc(files, func(f File) bool { return f.Status == statusJudged })
+	return slices.ContainsFunc(files, func(f File) bool { return f.Status == StatusJudged })
 }
 
 // all judges the files marked for it, each against the change at the same index, and then finds
@@ -134,7 +134,7 @@ func anyJudged(files []File) bool {
 // stopped to wait for its file's hunks could leave no worker free to ask about them.
 func (j *judge) all(ctx context.Context, files []File, changes []gitdiff.Change) error {
 	err := j.each(ctx, len(files), func(ctx context.Context, i int) error {
-		if files[i].Status != statusJudged {
+		if files[i].Status != StatusJudged {
 			return nil
 		}
 		return j.file(ctx, &files[i], changes[i])

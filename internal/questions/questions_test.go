@@ -150,7 +150,7 @@ func TestGateQuestionAndThresholdCanChange(t *testing.T) {
 
 	qs = mustResolve(t, "added_copies", 0, nil, nil)
 	g := find(t, qs, "added_copies")
-	if !g.Gates || g.Role != "gate" || g.Threshold != DefaultThreshold {
+	if !g.Gates || g.Role != "gate" || g.Threshold != defaultThreshold {
 		t.Fatalf("added_copies = %+v", g)
 	}
 	pb := find(t, qs, "push_back")

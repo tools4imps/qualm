@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/tools4imps/qualm/internal/atomicfile"
 	"github.com/tools4imps/qualm/internal/questions"
 )
 
@@ -78,8 +79,8 @@ func Load(dir string) (Config, error) {
 	return c, nil
 }
 
-// Save writes qualm.json to dir. It writes a temporary file beside it and renames that over the
-// target, so a crash leaves the old file or the new one, never half of either.
+// Save writes qualm.json to dir, whole or not at all. A config is meant to be committed and
+// shared, so it is world readable.
 func (c Config) Save(dir string) error {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -88,26 +89,8 @@ func (c Config) Save(dir string) error {
 	if err := enc.Encode(c); err != nil {
 		return fmt.Errorf("%s: %w", File, err)
 	}
-	tmp, err := os.CreateTemp(dir, File+".tmp-*")
-	if err != nil {
+	if err := atomicfile.Write(filepath.Join(dir, File), buf.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("%s: %w", File, err)
-	}
-	name := tmp.Name()
-	_, werr := tmp.Write(buf.Bytes())
-	cerr := tmp.Close()
-	if werr == nil {
-		werr = cerr
-	}
-	if werr == nil {
-		// CreateTemp makes the file 0600, but a config is meant to be committed and shared.
-		werr = os.Chmod(name, 0o644)
-	}
-	if werr == nil {
-		werr = os.Rename(name, filepath.Join(dir, File))
-	}
-	if werr != nil {
-		os.Remove(name)
-		return fmt.Errorf("%s: %w", File, werr)
 	}
 	return nil
 }

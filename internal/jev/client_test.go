@@ -172,6 +172,32 @@ func TestBadRepliesAreErrors(t *testing.T) {
 }
 
 // Contract: jev/J4
+func TestAScoreQuestionWithOneLevelIsAnError(t *testing.T) {
+	one := questions.Question{ID: "flat", Type: "score", Instructions: "x", Criteria: json.RawMessage(`["only"]`)}
+	// Whatever the score, there is no top level to divide it by.
+	for _, score := range []string{"-1", "0", "0.5", "1"} {
+		body := `{"answers":{"flat":{"score":` + score + `}}}`
+
+		_, err := parseReply([]byte(body), []questions.Question{one})
+
+		if err == nil || !strings.Contains(err.Error(), "flat") {
+			t.Errorf("score %s: err = %v, want one naming the question", score, err)
+		}
+	}
+}
+
+// Contract: jev/J4
+func TestAQuestionOfAnUnknownTypeIsAnError(t *testing.T) {
+	odd := questions.Question{ID: "odd", Type: "ranking", Instructions: "x"}
+
+	_, err := parseReply([]byte(`{"answers":{"odd":{"noul":0.5}}}`), []questions.Question{odd})
+
+	if err == nil || !strings.Contains(err.Error(), "ranking") {
+		t.Errorf("err = %v, want one naming the type", err)
+	}
+}
+
+// Contract: jev/J4
 func TestExtraAnswersAreIgnored(t *testing.T) {
 	f := &fake{statuses: []int{200}, body: goodReply}
 	c, _ := start(t, f)

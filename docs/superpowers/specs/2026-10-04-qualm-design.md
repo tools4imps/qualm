@@ -167,7 +167,7 @@ What to do
 - A passing run prints one line: `qualm: 7 changed files, no qualms.` Kept files and stale keeps are listed under it when there are any.
 - With nothing to judge it prints `qualm: nothing to judge.` and exits 0.
 - A failing file shows its gate value, the direction when it isn't "same", and each diagnosis at 0.5 or above with its line range.
-- `--format json` prints one object: `{ "passed", "base", "threshold", "files": [ { "path", "status", "answers", "failed", "where" } ], "kept", "stale_keeps", "usage": { "requests", "input_tokens", "cost" } }`. `status` is `judged`, `kept` or `skipped`.
+- `--format json` prints one object: `{ "passed", "dry_run", "base", "files": [ { "path", "status", "reason", "bytes", "answers", "failed", "where" } ], "stale_keeps", "usage": { "requests", "input_tokens", "cost" } }`. `status` is `judged`, `kept` or `skipped`, and a kept file carries its reason.
 
 ## The cache
 

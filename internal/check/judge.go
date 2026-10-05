@@ -16,8 +16,8 @@ import (
 	"github.com/tools4imps/qualm/internal/questions"
 )
 
-// FormatNote tells Jev how to read the change it is sent.
-const FormatNote = "A unified diff of one file. Lines starting with - are the earlier version, lines starting with + are the later version."
+// diffFormat tells Jev how to read the change it is sent.
+const diffFormat = "A unified diff of one file. Lines starting with - are the earlier version, lines starting with + are the later version."
 
 // pieceLimit is the most bytes of diff sent in one request.
 const pieceLimit = 60000
@@ -100,7 +100,7 @@ func cacheDir(dir string) (string, error) {
 
 // request builds what is sent for a change, or for a part of one, to a file at path.
 func (j *judge) request(path, change string, qs []questions.Question) jev.Request {
-	state := map[string]any{"format": FormatNote, "change": change}
+	state := map[string]any{"format": diffFormat, "change": change}
 	if language, ok := languages[filepath.Ext(path)]; ok {
 		state["language"] = language
 	}
@@ -232,7 +232,7 @@ func combine(qs []questions.Question, replies []jev.Reply) map[string]jev.Answer
 // strength is what pieces are compared by: the value, or for a choice the probability of its
 // first-listed option, since a choice's own value belongs to whichever option won.
 func strength(q questions.Question, a jev.Answer) float64 {
-	if q.Type == "choice" {
+	if q.Type == questions.TypeChoice {
 		return a.Probabilities[q.Options()[0]]
 	}
 	return a.Value

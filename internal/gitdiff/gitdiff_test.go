@@ -276,7 +276,7 @@ func TestChangesCountCommittedStagedUnstagedAndUntracked(t *testing.T) {
 }
 
 // Contract: diff/D4
-func TestChangesListStatusesSortedAndLeaveOutDeletes(t *testing.T) {
+func TestChangesListPathsSortedAndLeaveOutDeletes(t *testing.T) {
 	dir, _ := branchRepo(t)
 	// b.go gets unrelated content so git pairs the rename with c.go and not with the deleted file.
 	write(t, dir, "b.go", strings.Repeat("something else entirely\n", 30))
@@ -301,13 +301,6 @@ func TestChangesListStatusesSortedAndLeaveOutDeletes(t *testing.T) {
 		t.Fatalf("paths = %v, want %v", paths(got), want)
 	}
 	m := byPath(t, got)
-	for path, status := range map[string]string{
-		"a.go": "modified", "m-untracked.go": "added", "sub/moved.go": "renamed", "z-new.go": "added",
-	} {
-		if m[path].Status != status {
-			t.Errorf("%s status = %q, want %q", path, m[path].Status, status)
-		}
-	}
 	if d := m["sub/moved.go"].Diff; !strings.HasPrefix(d, "--- a/c.go\n+++ b/sub/moved.go\n") {
 		t.Errorf("renamed diff should show old and new paths, got %q", d)
 	}
@@ -404,11 +397,11 @@ func TestDiffHasNoGitHeaderLines(t *testing.T) {
 func TestNormaliseDropsEverythingBeforeFirstMinusLine(t *testing.T) {
 	raw := "diff --git a/x b/x\nindex 1..2 100644\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"
 	want := "--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n"
-	if got := Normalise(raw); got != want {
-		t.Errorf("Normalise = %q, want %q", got, want)
+	if got := normalise(raw); got != want {
+		t.Errorf("normalise = %q, want %q", got, want)
 	}
-	if got := Normalise("diff --git a/x b/x\nsimilarity index 100%\n"); got != "" {
-		t.Errorf("Normalise of a diff with no hunks = %q, want empty", got)
+	if got := normalise("diff --git a/x b/x\nsimilarity index 100%\n"); got != "" {
+		t.Errorf("normalise of a diff with no hunks = %q, want empty", got)
 	}
 }
 

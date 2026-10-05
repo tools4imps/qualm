@@ -15,7 +15,6 @@ import (
 // Change is one changed file between the base and the working tree.
 type Change struct {
 	Path   string // the path in the working tree
-	Status string // "added", "modified" or "renamed"
 	Diff   string // the normalised diff, empty for a binary file
 	Binary bool
 	Marked bool // git attributes mark it linguist-generated or linguist-vendored
@@ -94,9 +93,9 @@ func Base(dir, ref string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// statuses names the kinds of change that are listed, by the letter git gives them. A change of
-// type, such as a file that became a symlink, counts as modified.
-var statuses = map[byte]string{'A': "added", 'M': "modified", 'T': "modified", 'R': "renamed"}
+// listed holds the letters git gives the kinds of change that are listed: added, modified, renamed
+// and changed in type, such as a file that became a symlink. Deleted files are left out.
+const listed = "AMTR"
 
 // Changes lists the added, modified, renamed and untracked files between base and the working
 // tree of dir, narrowed to paths when any are given, sorted by path.
@@ -104,12 +103,12 @@ func Changes(dir, base string, paths []string) ([]Change, error) {
 	spec := append([]string{"--"}, paths...)
 
 	// --relative keeps names relative to dir, which is how the path arguments are read too.
-	listed, err := run(dir, "", nil, append([]string{"diff", "--relative", "--name-status", "-M", "-z", base}, spec...)...)
+	names, err := run(dir, "", nil, append([]string{"diff", "--relative", "--name-status", "-M", "-z", base}, spec...)...)
 	if err != nil {
 		return nil, err
 	}
 	var changes []Change
-	toks := strings.Split(listed, "\x00")
+	toks := strings.Split(names, "\x00")
 	for i := 0; i < len(toks) && toks[i] != ""; {
 		// A rename lists the old path and then the new one. -M finds renames and never copies, so
 		// every other entry has one path.
@@ -120,13 +119,13 @@ func Changes(dir, base string, paths []string) ([]Change, error) {
 		if i+n >= len(toks) {
 			return nil, errors.New("git diff: malformed name-status output")
 		}
-		if status, ok := statuses[code]; ok {
+		if strings.IndexByte(listed, code) >= 0 {
 			// A rename is asked for by both paths, so that git pairs them again.
 			raw, err := run(dir, "", nil, append([]string{"diff", "--relative", "-U8", "-M", base, "--"}, toks[i+1:i+1+n]...)...)
 			if err != nil {
 				return nil, err
 			}
-			changes = append(changes, build(toks[i+n], status, raw))
+			changes = append(changes, build(toks[i+n], raw))
 		}
 		i += 1 + n
 	}
@@ -145,7 +144,7 @@ func Changes(dir, base string, paths []string) ([]Change, error) {
 		if err != nil {
 			return nil, err
 		}
-		changes = append(changes, build(p, "added", raw))
+		changes = append(changes, build(p, raw))
 	}
 
 	slices.SortFunc(changes, func(a, b Change) int { return cmp.Compare(a.Path, b.Path) })
@@ -156,8 +155,8 @@ func Changes(dir, base string, paths []string) ([]Change, error) {
 }
 
 // build normalises a raw diff and notes whether git called the file binary.
-func build(path, status, raw string) Change {
-	c := Change{Path: path, Status: status, Diff: Normalise(raw)}
+func build(path, raw string) Change {
+	c := Change{Path: path, Diff: normalise(raw)}
 	if c.Diff == "" {
 		for _, l := range strings.Split(raw, "\n") {
 			if strings.HasPrefix(l, "Binary files ") {
